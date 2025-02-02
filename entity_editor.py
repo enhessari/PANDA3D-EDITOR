@@ -17,12 +17,13 @@ class MapLoader:
 
     def extract_map(self, map_file, extract_to):
         """Extracts the .map file (ZIP archive) to a target directory."""
+        base_dir = os.getcwd()  # current working directory
+        project_dir = "./" + os.path.split(map_file)[0]
+        map_file = os.path.join(project_dir, f"{os.path.split(map_file)[1]}")
         if not os.path.exists(map_file):
             print(f"❌ Map file not found: {map_file}")
             return False
-        if os.path.isfile(map_file):
-            print(f"❌ Map file not found: {map_file}")
-            return False
+
 
         os.makedirs(extract_to, exist_ok=True)  # Ensure target directory exists
 
@@ -37,11 +38,11 @@ class MapLoader:
 
     def load_map(self, map_file):
         """Extracts and loads a .map file into the scene."""
-        extract_dir = f"./maps_extracted/{os.path.basename(map_file).replace('.map', '')}"
+        extract_dir = f"./toml_loader/{os.path.basename(map_file).replace('.map', '')}"
 
-        if self.extract_map(self, map_file, extract_dir):
+        if self.extract_map(map_file, extract_dir):
             print("✅ Map extraction successful, loading scene...")
-            entity_loader = Load.load_project_from_folder_toml(extract_dir, self.world.render)
+            entity_loader = Load(self.world).load_project_from_folder_toml(extract_dir, self.world.render)
             print("🎮 Scene loaded successfully!")
         else:
             print("❌ Failed to load map.")
@@ -200,7 +201,7 @@ class Load:
             print(f"❌ Input folder {input_folder} does not exist.")
             return []
         
-        self.load_lights_from_toml(input_folder + "lights.toml", root_node)
+        self.load_lights_from_toml(input_folder + "/lights/lights.toml", root_node)
 
         entities = []
         for file_name in os.listdir(input_folder):
@@ -286,9 +287,9 @@ class Load:
             raise AttributeError(f"The script at {script_path} does not define a 'Script' class.")
 
 
-class Save():
-    def __init__(self):
-        pass
+class Save:
+    def __init__(self, world):
+        self.world = world
     def save_lights_to_toml(self, lights, file_path):
         """
         Save all lights in the scene to a TOML file.
@@ -347,8 +348,11 @@ class Save():
             os.makedirs(output_folder)
             
         lights = [node for node in root_node.find_all_matches('**/+Light')]
-
-        self.save_lights_to_toml(self, lights, "/saves/lights.toml")
+        
+        os.makedirs(output_folder + "/lights")
+        
+        
+        self.save_lights_to_toml(lights, output_folder + "\lights\lights.toml")
 
         for node in root_node.find_all_matches("**"):  # Traverse all nodes in the scene graph
             tags = node.get_python_tag_keys()

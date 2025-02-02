@@ -430,20 +430,35 @@ class StartupWindow(QWidget):
                 item.setData(0, full_path)  # 0 represents the role (i.e., Qt.UserRole can be used as well)
                 self.project_list.addItem(item)
 
-    def load_projects(self):
+    def load_projects(self, select=None):
         """Opens the selected project and loads it using entity_editor."""
         
+        global project_name
         global world
         
         self.project_dir = ""
         
-        selected_item = self.project_list.currentItem()
+        if not select:
+            selected_item = self.project_list.currentItem()
+            if selected_item:
+                project_name = selected_item.text()  # Store project name globally
+        else:
+            project_name = select
+            selected_item = project_name
         if selected_item:
-            project_name = selected_item.text()  # Store project name globally
+            
+            
 
-            project_path = os.path.join(self.project_dir, project_name)
+            project_path = os.path.join(project_name)
             print(f"Opening project: {project_path}")
 
+            with open(project_path + "\preferences.toml", "r") as pref:
+                file = toml.load(pref)["main_map"]
+                
+            project_name = file
+                
+            
+            
             # Hide startup window and show main editor
             self.close()
             appw.show()
@@ -453,8 +468,7 @@ class StartupWindow(QWidget):
             
             
             
-            entity_loader = entity_editor.MapLoader.extract_map(entity_editor.MapLoader, project_path, "./toml_loader/")
-            entity_loader = entity_editor.MapLoader.load_map(entity_editor.MapLoader, project_path)
+            entity_loader = entity_editor.MapLoader(world).load_map(file)
             print(f"✅ Project {project_name} loaded successfully!")
         else:
             QMessageBox.warning(self, "No Project Selected", "Please select a project to open.")
@@ -479,18 +493,21 @@ class StartupWindow(QWidget):
         os.makedirs(project_path)
         print(f"📂 Created new project: {project_path}")
         
+        
+        output_toml = os.path.join(".", "toml_loader", project_name)
+        output_zip = os.path.join(".", "saves", project_name, f"{project_name}.map")
 
         # Save an empty scene using entity_editor
-        entity_saver = entity_editor.Save.save_scene_to_toml(entity_editor.Save, world.render, "/saves/" + project_name)
-        entity_saver = entity_editor.Save.save_scene_to_map(entity_editor.Save, "/saves/" + project_name,  "/saves/" + project_name + "/lights/", project_name + ".map")
-        main_map = {"main_map" : "/saves/" + project_name + ".map"}
+        entity_saver = entity_editor.Save(world).save_scene_to_toml(world.render, output_toml)
+        entity_saver = entity_editor.Save(world).save_scene_to_map("/toml_loader/" + project_name,  "/toml_loader/" + project_name + "/lights/", output_zip)
+        main_map = {"main_map" : "/saves/" + project_name + "/" + project_name + ".map"}
         toml_str = toml.dumps(main_map)
 
         with open(f".\saves\{project_name}\preferences.toml", "w") as pref:
             pref.write(toml_str)
 
         # Refresh project list and confirm
-        self.load_projects()
+        self.load_projects(select=f".\saves\{project_name}")
         QMessageBox.information(self, "Project Created", f"Project '{project_name}' created and initialized!")
 
     def launch_main_app(self, project_path):
@@ -525,10 +542,11 @@ class Save_ui(QInputDialog):
         self.setLayout(layout)
     
     def process_input(self):
+        global world
         global project_name
         # Get the input text and display it in the label
         user_input = self.input_field.text()
-        ent_editor = entity_editor.Save()
+        ent_editor = entity_editor.Save(world)
         ent_editor.save_scene_ui_to_toml(world.render2d, project_name + "/saves/ui/", user_input)
         
 class Save_map(QInputDialog):
@@ -562,9 +580,10 @@ class Save_map(QInputDialog):
             self.save_p = save_dialogue().prompt_save_project()
     
     def process_input(self):
+        global world
         # Get the input text and display it in the label
         user_input = self.input_field.text()
-        ent_editor = entity_editor.Save()
+        ent_editor = entity_editor.Save(world)
         save_map(user_input)
         
 
@@ -720,8 +739,11 @@ def startup_w():
 
 
 def save_map(map_name):
-    entity_editor.Save.save_scene_to_toml('/saves/' + map_name , '.map' + map_name)
-    entity_editor.Save.save_scene_to_map('/saves/' + map_name , '.map' + map_name)
+    
+    global world
+    global project_name
+    entity_editor.Save(world).save_scene_to_toml(world.render, os.path.split(project_name)[0] + map_name)
+    entity_editor.Save(world).save_scene_to_map(os.path.split(project_name)[0] + map_name , os.path.split(project_name)[0] + "/lights", os.path.split(project_name)[0] + "/" + map_name + '.map')
 
 
 def delete_selection():
