@@ -16,16 +16,17 @@ class MapLoader:
         self.world = world
 
     def extract_map(self, map_file, extract_to):
-        """Extracts the .map file (ZIP archive) to a target directory."""
-        base_dir = os.getcwd()  # current working directory
-        project_dir = "./" + os.path.split(map_file)[0]
-        map_file = os.path.join(project_dir, f"{os.path.split(map_file)[1]}")
+        """
+        Extracts the .map file (a ZIP archive) to a target directory.
+        Returns True on success, False otherwise.
+        """
+        # Use an absolute, normalized path.
+        map_file = os.path.abspath(os.path.normpath(map_file))
         if not os.path.exists(map_file):
             print(f"❌ Map file not found: {map_file}")
             return False
 
-
-        os.makedirs(extract_to, exist_ok=True)  # Ensure target directory exists
+        os.makedirs(extract_to, exist_ok=True)
 
         try:
             with zipfile.ZipFile(map_file, 'r') as zip_ref:
@@ -37,27 +38,38 @@ class MapLoader:
             return False
 
     def load_map(self, map_file):
-        """Extracts and loads a .map file into the scene."""
-        extract_dir = f"./toml_loader/{os.path.basename(map_file).replace('.map', '')}"
+        """
+        Loads the project from a .map file.
+        Expects the map file to be stored in the project folder (e.g. ./saves/tttttt/tttttt.map).
+        Extracts the map into a folder with the same name (without the .map extension)
+        and then loads the scene from the TOML files within.
+        """
+        # Use absolute paths
+        map_file = os.path.abspath(os.path.normpath(map_file))
+        project_folder = os.path.dirname(map_file)
+        # For example, if map_file is .../saves/tttttt/tttttt.map, extract to .../saves/tttttt/tttttt
+        extract_dir = os.path.join(project_folder, os.path.basename(map_file).replace('.map', ''))
 
         if self.extract_map(map_file, extract_dir):
             print("✅ Map extraction successful, loading scene...")
-            entity_loader = Load(self.world).load_project_from_folder_toml(extract_dir, self.world.render)
+            loader_instance = Load(self.world)
+            loader_instance.load_project_from_folder_toml(extract_dir, self.world.render)
             print("🎮 Scene loaded successfully!")
         else:
             print("❌ Failed to load map.")
 
+# ------------------------------------------------------------------------------
+# Load class: Reads TOML files from a folder and reconstructs scene objects.
+# (You must adjust these functions so that they correctly match your saved data.)
+# ------------------------------------------------------------------------------
+
 class Load:
     def __init__(self, world):
         self.world = world
-        
-    def load_lights_from_toml(self, file_path: str, render):
+
+    def load_lights_from_toml(self, file_path: str, render: NodePath):
         """
         Load lights from a TOML file and attach them to the render node.
-
-        Args:
-            file_path (str): Path to the TOML file.
-            render (NodePath): The root node to attach lights to.
         """
         if not file_path or not os.path.exists(file_path):
             print(f"File not found: {file_path}")
@@ -75,6 +87,8 @@ class Load:
                 light = PointLight(light_name)
             elif light_type == "directional":
                 light = DirectionalLight(light_name)
+            elif light_type == "ambient":
+                light = AmbientLight(light_name)
             elif light_type == "spot":
                 light = Spotlight(light_name)
                 fov = light_data.get("fov", 45.0)
@@ -92,9 +106,69 @@ class Load:
                 light_node.lookAt(Vec3(direction["x"], direction["y"], direction["z"]))
 
             render.setLight(light_node)
-
         print(f"Lights loaded from {file_path}")
 
+    def load_project_from_folder_toml(self, input_folder: str, root_node: NodePath):
+        """
+        Loads a project (scene) from a folder containing TOML files.
+        This example first loads lights, then iterates over all TOML files in the folder
+        to reconstruct scene entities.
+        """
+        if not os.path.exists(input_folder):
+            print(f"❌ Input folder {input_folder} does not exist.")
+            return []
+
+        # First, load lights if available.
+        lights_toml = os.path.join(input_folder, "lights", "lights.toml")
+        if os.path.exists(lights_toml):
+            self.load_lights_from_toml(lights_toml, root_node)
+        
+        # Iterate over other TOML files in the folder to load entities.
+        entities = []
+        for file_name in os.listdir(input_folder):
+            if file_name.endswith(".toml") and file_name != "lights.toml":
+                file_path = os.path.join(input_folder, file_name)
+                with open(file_path, "r") as file:
+                    entity_data = toml.load(file)
+                
+                # Example: extract transform and load a model if available.
+                name = entity_data.get("name", "Unnamed")
+                model_path = entity_data.get("entity_model", "")
+                transform = entity_data.get("transform", {})
+                pos = transform.get("position", {"x": 0, "y": 0, "z": 0})
+                rot = transform.get("rotation", {"h": 0, "p": 0, "r": 0})
+                scale = transform.get("scale", {"x": 1, "y": 1, "z": 1})
+
+                # Create a new node for the entity.
+                entity_node = root_node.attachNewNode(name)
+                if model_path and os.path.exists(model_path):
+                    # Load and reparent the model.
+                    model = loader.loadModel(model_path)
+                    model.reparentTo(entity_node)
+                    print(f"✅ Loaded model for {name}: {model_path}")
+                else:
+                    print(f"⚠️ Model path not found for {name}: {model_path}")
+
+                entity_node.setPos(pos["x"], pos["y"], pos["z"])
+                entity_node.setHpr(rot["h"], rot["p"], rot["r"])
+                entity_node.setScale(scale["x"], scale["y"], scale["z"])
+                entities.append(entity_node)
+                print(f"✅ Entity '{name}' loaded from {file_name}")
+
+        return entities
+
+    def load_script(self, script_path: str, node: NodePath):
+        """
+        Dynamically load a script from a Python file and attach it to a node.
+        """
+        spec = importlib.util.spec_from_file_location("script", script_path)
+        script_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(script_module)
+        if hasattr(script_module, "Script"):
+            return script_module.Script(node)
+        else:
+            raise AttributeError(f"The script at {script_path} does not define a 'Script' class.")
+        
     def load_ui_from_folder_toml(self, input_folder: str, root_node: NodePath):
         """
         Load entities from TOML files, reconstruct them in the scene graph, attach models, scripts, and build a list of entities.
@@ -195,111 +269,18 @@ class Load:
                 print(f"Entity '{name}' with ID '{entity_id}' loaded.")
 
         return entities
-    def load_project_from_folder_toml(self, input_folder: str, root_node: NodePath):
-        """Load entities from TOML files, reconstruct models, attach scripts, lights, and particles."""
-        if not os.path.exists(input_folder):
-            print(f"❌ Input folder {input_folder} does not exist.")
-            return []
-        
-        self.load_lights_from_toml(input_folder + "/lights/lights.toml", root_node)
 
-        entities = []
-        for file_name in os.listdir(input_folder):
-            if file_name.endswith(".toml"):
-                file_path = os.path.join(input_folder, file_name)
-                with open(file_path, "r") as file:
-                    entity_data = toml.load(file)
-
-                # Extract entity details
-                name = entity_data.get("name", "Unnamed")
-                entity_id = entity_data.get("id", None)
-                model_path = entity_data.get("entity_model", "")
-                transform = entity_data.get("transform", {})
-
-                # Load the model
-                entity_node = root_node.attach_new_node(name)
-                if model_path and os.path.exists(model_path):
-                    model = loader.load_model(model_path)
-                    model.reparent_to(entity_node)
-                    print(f"✅ Loaded model for {name}: {model_path}")
-
-                # Apply transformations
-                pos = transform.get("position", {"x": 0, "y": 0, "z": 0})
-                rot = transform.get("rotation", {"h": 0, "p": 0, "r": 0})
-                scale = transform.get("scale", {"x": 1, "y": 1, "z": 1})
-                entity_node.set_pos(pos["x"], pos["y"], pos["z"])
-                entity_node.set_hpr(rot["h"], rot["p"], rot["r"])
-                entity_node.set_scale(scale["x"], scale["y"], scale["z"])
-
-                # Restore Lights
-                for light_data in entity_data.get("lights", []):
-                    light_type = light_data["type"]
-                    light_color = light_data["color"]
-                    light_pos = light_data["position"]
-
-                    if light_type == "PointLight":
-                        light = PointLight(name + "_light")
-                    elif light_type == "Spotlight":
-                        light = Spotlight(name + "_light")
-                    elif light_type == "AmbientLight":
-                        light = AmbientLight(name + "_light")
-                    elif light_type == "DirectionalLight":
-                        light = DirectionalLight(name + "_light")
-                    else:
-                        print(f"⚠️ Unknown light type: {light_type}")
-                        continue
-
-                    light.set_color((light_color["r"], light_color["g"], light_color["b"], 1))
-                    light_np = entity_node.attach_new_node(light)
-                    light_np.set_pos(light_pos["x"], light_pos["y"], light_pos["z"])
-                    root_node.set_light(light_np)
-
-                # Restore Particles
-                for particle_data in entity_data.get("particles", []):
-                    particle_name = particle_data["name"]
-                    print(f"✨ Restoring particle effect: {particle_name} for {name}")
-                    # TODO: Add actual particle loading logic here
-
-                # Store entity reference
-                entities.append(entity_node)
-                print(f"✅ Entity {name} restored with lights and particles.")
-
-        return entities
-
-    def load_script(self, script_path: str, node: NodePath):
-        """
-        Dynamically load a script and attach it to a NodePath.
-
-        Args:
-            script_path (str): Path to the Python script.
-            node (NodePath): The NodePath to attach the script to.
-
-        Returns:
-            object: An instance of the script's class.
-        """
-        spec = importlib.util.spec_from_file_location("script", script_path)
-        script_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(script_module)
-
-        if hasattr(script_module, "Script"):
-            return script_module.Script(node)
-        else:
-            raise AttributeError(f"The script at {script_path} does not define a 'Script' class.")
 
 
 class Save:
     def __init__(self, world):
         self.world = world
+
     def save_lights_to_toml(self, lights, file_path):
         """
         Save all lights in the scene to a TOML file.
-
-        Args:
-            lights (list): A list of NodePath objects with lights attached.
-            file_path (str): Path to the TOML file to save.
         """
         lights_data = {}
-
         for i, light_node in enumerate(lights):
             light = light_node.node()
             light_data = {
@@ -316,10 +297,11 @@ class Save:
                     "a": light.getColor()[3],
                 },
             }
-
+            # Determine light type
+            from panda3d.core import PointLight, AmbientLight, DirectionalLight, Spotlight
             if isinstance(light, PointLight):
                 light_data["type"] = "point"
-            if isinstance(light, AmbientLight):
+            elif isinstance(light, AmbientLight):
                 light_data["type"] = "ambient"
             elif isinstance(light, DirectionalLight):
                 light_data["type"] = "directional"
@@ -336,39 +318,47 @@ class Save:
                     "z": light_node.getQuat().getForward()[2],
                 }
                 light_data["fov"] = light.getLens().getFov()[0]
+            else:
+                print(f"Unsupported light type for light_{i+1}")
+                continue
 
             lights_data[f"light_{i+1}"] = light_data
 
+        # Write out the TOML file
         with open(file_path, "w") as file:
             toml.dump(lights_data, file)
-            
-    def save_scene_to_toml(self, root_node: NodePath, output_folder: str):
-        """Traverse the scene graph, extract entity data, and save each entity to a TOML file."""
-        if not os.path.exists(output_folder):
-            os.makedirs(output_folder)
-            
-        lights = [node for node in root_node.find_all_matches('**/+Light')]
-        
-        os.makedirs(output_folder + "/lights")
-        
-        
-        self.save_lights_to_toml(lights, output_folder + "\lights\lights.toml")
+        print(f"Lights saved to {file_path}")
 
-        for node in root_node.find_all_matches("**"):  # Traverse all nodes in the scene graph
+    def save_scene_to_toml(self, root_node: NodePath, output_folder: str):
+        """
+        Traverse the scene graph, extract entity data, and save each entity to its own TOML file.
+        Also saves lights into a subfolder.
+        """
+        # Ensure output folder exists
+        os.makedirs(output_folder, exist_ok=True)
+        # Save lights first
+        lights = [node for node in root_node.find_all_matches('**/+Light')]
+        lights_folder = os.path.join(output_folder, "lights")
+        os.makedirs(lights_folder, exist_ok=True)
+        lights_file = os.path.join(lights_folder, "lights.toml")
+        self.save_lights_to_toml(lights, lights_file)
+
+        # Now save entities
+        for node in root_node.find_all_matches("**"):
             tags = node.get_python_tag_keys()
             if "id" in tags:
                 entity_id = node.get_python_tag("id")
                 model_path = node.get_python_tag("model_path")
-
-                # Get transform properties
                 position = node.get_pos()
                 rotation = node.get_hpr()
                 scale = node.get_scale()
 
+                # Extract custom properties
+                properties = {}
+                for key in tags:
+                    if key not in ("id", "pos", "hpr", "scale", "scripts"):
+                        properties[key] = node.get_python_tag(key)
 
-
-
-                # Store entity data
                 entity_data = {
                     "name": node.get_name(),
                     "id": entity_id,
@@ -379,56 +369,38 @@ class Save:
                         "rotation": {"h": rotation.x, "p": rotation.y, "r": rotation.z},
                         "scale": {"x": scale.x, "y": scale.y, "z": scale.z},
                     },
-                    "lights": lights,
-
+                    "properties": properties,
                 }
-
-                # Convert dictionary to TOML
                 file_name = f"{node.get_name()}_{entity_id}.toml"
                 file_path = os.path.join(output_folder, file_name)
                 with open(file_path, "w") as file:
                     toml.dump(entity_data, file)
+                print(f"Saved {file_name} to {output_folder}")
 
-                print(f"✅ Saved {file_name} including lights & particles to {output_folder}")
-                
-    def save_scene_to_map(self, directory, lights_directory, output_zip):
+    def zip_toml_files(self, source_dir, output_zip):
         """
-        Zips TOML files from two directories:
-          - TOML files in the top level of `directory`
-          - TOML files in the top level of `lights_directory`
-
-        Files from lights_directory will be stored in a subfolder (e.g., "lights")
-        within the ZIP archive.
-
-        Args:
-            directory (str): Main directory to search for TOML files.
-            lights_directory (str): Extra directory (e.g., "/saves/lights") to search for TOML files.
-            output_zip (str): Output zip file name (with .zip extension, or .map if you prefer).
+        Zips all .toml files from the source directory (and its subdirectories) into a single ZIP file.
         """
         with zipfile.ZipFile(output_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            # Process the main directory (only the top-level files)
-            for root, dirs, files in os.walk(directory):
-                for file in files:
-                    if file.endswith('.toml'):
-                        file_path = os.path.join(root, file)
-                        # Store only the filename (or adjust if you need a subfolder)
-                        zipf.write(file_path, arcname=file)
-                # Break to avoid processing subdirectories
-                break
+            for foldername, subfolders, filenames in os.walk(source_dir):
+                for filename in filenames:
+                    if filename.endswith('.toml'):
+                        filepath = os.path.join(foldername, filename)
+                        # Get relative path for zip archive
+                        arcname = os.path.relpath(filepath, source_dir)
+                        zipf.write(filepath, arcname=arcname)
+        print(f"Zipped TOML files into: {output_zip}")
 
-            # Process the lights directory (only top-level files)
-            for root, dirs, files in os.walk(lights_directory):
-                for file in files:
-                    if file.endswith('.toml'):
-                        file_path = os.path.join(root, file)
-                        # Store under a "lights" folder in the zip file
-                        zipf.write(file_path, arcname=os.path.join("lights", file))
-                # Break to avoid recursing into subdirectories
-                break
-
-    
-    
-                
+    def save_scene_to_map(self, toml_folder: str, output_map: str):
+        """
+        Zips the TOML folder (containing scene and lights data) into a .map file.
+        """
+        if not os.path.exists(toml_folder):
+            print(f"❌ The TOML folder {toml_folder} does not exist.")
+            return
+        self.zip_toml_files(toml_folder, output_map)
+        print(f"Scene saved to map file: {output_map}")
+        
     def save_scene_ui_to_toml(self, root_node: NodePath, output_folder: str, file_name: str):
         """
         Traverse the scene graph, extract entity data, and save each entity to a TOML file.
@@ -544,62 +516,3 @@ class Save:
                             zipf.write(filepath, os.path.relpath(filepath, source_dir))
             print(f"Zipped all .toml files into: {output_file}")
         zip_toml_files("./saves/ui", file_name + ".ui")
-
-
-                
-
-                
-    def save_whole_scene_to_toml(self, root_node: NodePath, output_folder: str):
-        """
-        Traverse the scene graph, extract entity data, and save each entity to a TOML file.
-
-        Args:
-            root_node (NodePath): The root of the scene graph to traverse.
-            output_folder (str): Folder where TOML files will be saved.
-        """
-        # Ensure the output folder exists
-        if not os.path.exists(output_folder):
-            os.makedirs(output_folder)
-        entity_data = {}
-        for node in root_node.find_all_matches("**"):  # Traverse all nodes in the scene graph
-            tags = node.get_python_tag_keys()
-
-            # Check if the node has an 'id' tag
-            if "id" in tags:
-                entity_id = node.get_python_tag("id")
-                
-                model_path = node.get_python_tag("model_path")
-
-                # Get transform properties
-                position = node.get_pos()
-                rotation = node.get_hpr()
-                scale = node.get_scale()
-
-                # Get custom properties
-                properties = {}
-                for key in tags:
-                    if key not in ("id", "pos", "hpr", "scale", "scripts"):  # Exclude transform tags
-                        properties[key] = node.get_python_tag(key)
-
-                # Create a dictionary to store entity data
-                entity_data[node.get_name()] = {
-                    "name": node.get_name(),
-                    "id": entity_id,
-                    "entity_model": model_path,
-                    "type": "script",
-                    "transform": {
-                        "position": {"x": position.x, "y": position.y, "z": position.z},
-                        "rotation": {"h": rotation.x, "p": rotation.y, "r": rotation.z},
-                        "scale": {"x": scale.x, "y": scale.y, "z": scale.z},
-                    },
-                    "properties": properties,
-                }
-
-        # Convert dictionary to TOML string
-        toml_string = toml.dumps(entity_data)
-        # Save to a file with the node's name and ID
-        file_name = f"{node.get_name()}_{entity_id}.toml"
-        file_path = os.path.join(output_folder, file_name)
-        with open(file_path, "w") as file:
-            file.write(toml_string)
-        print(f"Saved {file_name} to {output_folder}")
