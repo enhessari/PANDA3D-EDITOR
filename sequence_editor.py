@@ -1,505 +1,339 @@
 #!/usr/bin/env python3
-from direct.showbase.ShowBase import ShowBase
-from direct.actor.Actor import Actor
-from direct.gui.DirectGui import (
-    DirectFrame, DirectButton, DirectSlider, DirectLabel,
-    DirectOptionMenu, DirectEntry
-)
-from direct.interval.IntervalGlobal import (
-    Sequence, Parallel, LerpPosInterval, LerpHprInterval, LerpScaleInterval
-)
-from panda3d.core import TextNode
 import sys
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QHBoxLayout, QVBoxLayout, QSlider,
+    QPushButton, QListWidget, QLabel, QComboBox, QLineEdit, QFileDialog
+)
+from PyQt5.QtCore import Qt, QTimer
 
-# List of UI module names for later replacement/integration with PyQt.
-UI_MODULES = [
-    "TimelineUI",         # Handles the timeline display and scrubbing.
-    "TrackUI",            # Manages the display of multiple tracks (actors, cameras, etc).
-    "KeyframeUI",         # Provides keyframe editing and dragging.
-    "PlaybackControlUI",  # Contains play/pause/rewind/fast-forward controls.
-    "JointSelectorUI"     # Joint selection and details viewing.
-]
+# Import your QPanda3D widget – note that it requires a reference to the Panda3D world.
+from QPanda3D.QPanda3DWidget import QPanda3DWidget
 
-def lerp_tuple(start_tuple, end_tuple, t):
-    """Linearly interpolates between two tuples."""
-    return tuple(s * (1 - t) + e * t for s, e in zip(start_tuple, end_tuple))
+from direct.actor.Actor import Actor
+from direct.interval.IntervalGlobal import Sequence, Parallel, LerpPosInterval, LerpHprInterval, LerpScaleInterval
+from panda3d.core import Vec3, CollisionTraverser, CollisionNode, CollisionRay, CollisionHandlerQueue, BitMask32
 
-class SequenceEditor(ShowBase):
-    def __init__(self):
-        ShowBase.__init__(self)
+def lerp_tuple(start, end, t):
+    """Linearly interpolates between two tuples element‐wise."""
+    return tuple(s * (1 - t) + e * t for s, e in zip(start, end))
+
+
+class SequenceEditorTab(QWidget):
+    def __init__(self, panda3DWorld, parent=None):
+        """
+        :param panda3DWorld: The Panda3D world instance (e.g., your PandaTest object)
+        """
+        # Create gizmos for translation control.
+        self.gizmo_active = False
+        self.current_drag_axis = None
+        super(SequenceEditorTab, self).__init__(parent)
+        self.panda3DWorld = panda3DWorld
+
+        # Main horizontal layout: left = 3D viewport, right = controls panel.
+        main_layout = QHBoxLayout(self)
         
-        # Disable the default mouse-based camera control.
-        self.disableMouse()
+        # --- 3D Viewport (QPanda3D widget) ---
+        # Pass the required panda3DWorld to the QPanda3DWidget.
+        self.panda_widget = QPanda3DWidget(panda3DWorld)
+        main_layout.addWidget(self.panda_widget, 3)
         
-        # --- Load a rigged Actor for full bone control ---
-        # Replace "models/panda-model" with the path to your rigged model.
+        # --- Controls Panel ---
+        controls_panel = QWidget()
+        controls_layout = QVBoxLayout(controls_panel)
+        main_layout.addWidget(controls_panel, 1)
+        
+        # Timeline slider and label
+        self.timeline_label = QLabel("Time: 0.00")
+        controls_layout.addWidget(self.timeline_label)
+        self.timeline_slider = QSlider(Qt.Horizontal)
+        self.timeline_slider.setMinimum(0)
+        self.timeline_slider.setMaximum(1500)  # 0–1500 represents 0.0 to 15.0 seconds
+        self.timeline_slider.setValue(0)
+        self.timeline_slider.valueChanged.connect(self.on_slider_change)
+        controls_layout.addWidget(self.timeline_slider)
+        
+        # Buttons for keyframe management
+        self.add_keyframe_btn = QPushButton("Add Keyframe")
+        self.add_keyframe_btn.clicked.connect(self.add_keyframe)
+        controls_layout.addWidget(self.add_keyframe_btn)
+        
+        self.remove_keyframe_btn = QPushButton("Remove Last Keyframe")
+        self.remove_keyframe_btn.clicked.connect(self.remove_last_keyframe)
+        controls_layout.addWidget(self.remove_keyframe_btn)
+        
+        self.play_btn = QPushButton("Play Sequence")
+        self.play_btn.clicked.connect(self.play_sequence)
+        controls_layout.addWidget(self.play_btn)
+        
+        # List widget to display keyframes
+        self.keyframe_list = QListWidget()
+        controls_layout.addWidget(QLabel("Keyframes"))
+        controls_layout.addWidget(self.keyframe_list)
+        
+        # --- Model Selection Section ---
+        self.select_model_btn = QPushButton("Select Model")
+        self.select_model_btn.clicked.connect(self.select_model)
+        controls_layout.addWidget(self.select_model_btn)
+        
+        # --- Joint/Bone Control Section ---
+        self.joint_control_label = QLabel("Joint Control:")
+        controls_layout.addWidget(self.joint_control_label)
+        
+        self.joint_combo = QComboBox()
+        controls_layout.addWidget(self.joint_combo)
+        self.joint_combo.currentIndexChanged.connect(self.on_joint_selected)
+        
+        # Joint Position fields
+        self.joint_pos_label = QLabel("Joint Pos (x,y,z):")
+        controls_layout.addWidget(self.joint_pos_label)
+        self.joint_pos_x = QLineEdit("0.0")
+        self.joint_pos_y = QLineEdit("0.0")
+        self.joint_pos_z = QLineEdit("0.0")
+        joint_pos_layout = QHBoxLayout()
+        joint_pos_layout.addWidget(self.joint_pos_x)
+        joint_pos_layout.addWidget(self.joint_pos_y)
+        joint_pos_layout.addWidget(self.joint_pos_z)
+        controls_layout.addLayout(joint_pos_layout)
+        
+        # Joint Rotation fields
+        self.joint_rot_label = QLabel("Joint Rot (h,p,r):")
+        controls_layout.addWidget(self.joint_rot_label)
+        self.joint_rot_h = QLineEdit("0.0")
+        self.joint_rot_p = QLineEdit("0.0")
+        self.joint_rot_r = QLineEdit("0.0")
+        joint_rot_layout = QHBoxLayout()
+        joint_rot_layout.addWidget(self.joint_rot_h)
+        joint_rot_layout.addWidget(self.joint_rot_p)
+        joint_rot_layout.addWidget(self.joint_rot_r)
+        controls_layout.addLayout(joint_rot_layout)
+        
+        # Joint Scale fields
+        self.joint_scale_label = QLabel("Joint Scale (x,y,z):")
+        controls_layout.addWidget(self.joint_scale_label)
+        self.joint_scale_x = QLineEdit("1.0")
+        self.joint_scale_y = QLineEdit("1.0")
+        self.joint_scale_z = QLineEdit("1.0")
+        joint_scale_layout = QHBoxLayout()
+        joint_scale_layout.addWidget(self.joint_scale_x)
+        joint_scale_layout.addWidget(self.joint_scale_y)
+        joint_scale_layout.addWidget(self.joint_scale_z)
+        controls_layout.addLayout(joint_scale_layout)
+        
+        self.apply_joint_transform_btn = QPushButton("Apply Joint Transform")
+        self.apply_joint_transform_btn.clicked.connect(self.apply_joint_transform)
+        controls_layout.addWidget(self.apply_joint_transform_btn)
+        
+        # --- Gizmo Controls Section (for visual interactive joint manipulation) ---
+        self.gizmo_toggle_btn = QPushButton("Toggle Translation Gizmo")
+        self.gizmo_toggle_btn.setCheckable(True)
+        self.gizmo_toggle_btn.clicked.connect(self.toggle_gizmo)
+        controls_layout.addWidget(self.gizmo_toggle_btn)
+        
+        controls_layout.addStretch()
+        
+        # --- Scene Setup ---
+        self.setup_scene()
+        
+        # --- Keyframe Data ---
+        self.keyframes = []
+        self.timeline_duration = 15.0  # seconds
+        self.sequence = None
+        
+        # Timer for updating UI during playback (optional)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_playback)
+        self.playing = False
+
+        # Setup collision traverser and handler for gizmo picking.
+        self.setup_gizmo_collision()
+
+        self.create_translation_gizmos()
+
+    def setup_scene(self):
+        """
+        Initializes the Panda3D scene.
+        Loads an Actor (using a default model) and reparents it to the world's render node.
+        Also sets up controlled joints for full joint/bone control.
+        """
+        # Load a default actor.
         self.actor = Actor("models/panda-model")
-        self.actor.reparentTo(self.render)
+        self.actor.reparentTo(self.panda3DWorld.render)
         self.actor.setScale(0.005)
         self.actor.setPos(0, 10, 0)
         self.actor.setHpr(0, 0, 0)
-        
-        # --- Create controlled joints dictionary ---
-        # This will allow manual control over each bone.
+        self.setup_joints()
+
+    def setup_joints(self):
+        """
+        Sets up controlled joints so that each joint can be manipulated.
+        Populates self.controlled_joints and fills the joint selection combo box.
+        """
         self.controlled_joints = {}
+        self.joint_combo.clear()
         for joint in self.actor.getJoints():
-            joint_name = joint.getName()
-            controlled = self.actor.controlJoint(None, 'modelRoot', joint_name)
-            self.controlled_joints[joint_name] = controlled
-        
-        # For joint selection UI.
-        self.selected_joint = None
-        
-        # --- Sequence Data ---
-        # Each keyframe stores the actor's global transform and each bone's transform.
-        self.keyframes = []
-        self.timeline_duration = 15.0
-        self.sequence = None
-        
-        self.create_ui()
-        
-        # Add a task to update joint details continuously (e.g., during timeline scrubbing).
-        self.taskMgr.add(self.update_joint_task, "UpdateJointTask")
-        
-    def create_ui(self):
-        # Main UI frame.
-        self.ui_frame = DirectFrame(
-            frameColor=(0, 0, 0, 0.5),
-            frameSize=(-1, 1, -0.8, 0.8),
-            pos=(0, 0, 0)
-        )
-        
-        # ---- Timeline Slider (for scrubbing) ----
-        self.timeline_slider = DirectSlider(
-            parent=self.ui_frame,
-            range=(0, self.timeline_duration),
-            value=0,
-            pos=(-0.8, 0, -0.7),
-            scale=0.5,
-            command=self.on_slider_update
-        )
-        self.slider_label = DirectLabel(
-            text="Time: 0.00",
-            scale=0.05,
-            pos=(-0.1, 0, -0.7),
-            parent=self.ui_frame,
-            text_align=TextNode.ALeft
-        )
-        
-        # ---- Control Buttons ----
-        self.add_keyframe_button = DirectButton(
-            text="Add Keyframe",
-            scale=0.05,
-            pos=(-0.8, 0, 0.7),
-            command=self.add_keyframe
-        )
-        self.remove_keyframe_button = DirectButton(
-            text="Remove Last Keyframe",
-            scale=0.05,
-            pos=(-0.8, 0, 0.6),
-            command=self.remove_last_keyframe
-        )
-        self.play_button = DirectButton(
-            text="Play Sequence",
-            scale=0.05,
-            pos=(-0.8, 0, 0.5),
-            command=self.play_sequence
-        )
-        self.keyframes_label = DirectLabel(
-            text=self.get_keyframes_text(),
-            scale=0.04,
-            pos=(-0.8, 0, 0.3),
-            parent=self.ui_frame,
-            text_align=TextNode.ALeft
-        )
-        
-        # ---- Joint Selection & Viewing UI ----
-        # Dropdown menu to select a joint from the controlled joints.
-        joint_names = list(self.controlled_joints.keys())
-        self.joint_selector = DirectOptionMenu(
-            parent=self.ui_frame,
-            text="Select Joint",
-            scale=0.05,
-            items=joint_names,
-            initialitem=0,
-            pos=(0.6, 0, 0.7),
-            command=self.on_joint_select
-        )
-        # Automatically select the first joint (if available).
-        if joint_names:
-            self.selected_joint = joint_names[0]
-        
-        # Label to display the selected joint's details.
-        self.joint_details_label = DirectLabel(
-            parent=self.ui_frame,
-            text="Joint Details:",
-            scale=0.05,
-            pos=(0.6, 0, 0.6),
-            text_align=TextNode.ALeft
-        )
-        
-        # A visual marker to indicate the selected joint.
-        self.joint_marker = self.loader.loadModel("models/misc/sphere")
-        self.joint_marker.setScale(0.2)
-        self.joint_marker.setColor(1, 0, 0, 1)
-        self.joint_marker.reparentTo(self.render)
-        self.joint_marker.hide()
-        
-        # ---- Joint Transform Editing UI ----
-        # Label for the editing section.
-        self.edit_label = DirectLabel(
-            parent=self.ui_frame,
-            text="Edit Joint Transform:",
-            scale=0.05,
-            pos=(0.6, 0, 0.45),
-            text_align=TextNode.ALeft
-        )
-        # Position editing entries.
-        self.pos_label = DirectLabel(
-            parent=self.ui_frame,
-            text="Pos (x, y, z):",
-            scale=0.04,
-            pos=(0.6, 0, 0.4),
-            text_align=TextNode.ALeft
-        )
-        self.pos_x_entry = DirectEntry(
-            parent=self.ui_frame,
-            initialText="0.0",
-            scale=0.04,
-            pos=(0.6, 0, 0.35),
-            numLines=1,
-            focus=0
-        )
-        self.pos_y_entry = DirectEntry(
-            parent=self.ui_frame,
-            initialText="0.0",
-            scale=0.04,
-            pos=(0.8, 0, 0.35),
-            numLines=1,
-            focus=0
-        )
-        self.pos_z_entry = DirectEntry(
-            parent=self.ui_frame,
-            initialText="0.0",
-            scale=0.04,
-            pos=(1.0, 0, 0.35),
-            numLines=1,
-            focus=0
-        )
-        
-        # Rotation editing entries.
-        self.rot_label = DirectLabel(
-            parent=self.ui_frame,
-            text="Rot (h, p, r):",
-            scale=0.04,
-            pos=(0.6, 0, 0.3),
-            text_align=TextNode.ALeft
-        )
-        self.rot_h_entry = DirectEntry(
-            parent=self.ui_frame,
-            initialText="0.0",
-            scale=0.04,
-            pos=(0.6, 0, 0.25),
-            numLines=1,
-            focus=0
-        )
-        self.rot_p_entry = DirectEntry(
-            parent=self.ui_frame,
-            initialText="0.0",
-            scale=0.04,
-            pos=(0.8, 0, 0.25),
-            numLines=1,
-            focus=0
-        )
-        self.rot_r_entry = DirectEntry(
-            parent=self.ui_frame,
-            initialText="0.0",
-            scale=0.04,
-            pos=(1.0, 0, 0.25),
-            numLines=1,
-            focus=0
-        )
-        
-        # Scale editing entries.
-        self.scale_label = DirectLabel(
-            parent=self.ui_frame,
-            text="Scale (x, y, z):",
-            scale=0.04,
-            pos=(0.6, 0, 0.2),
-            text_align=TextNode.ALeft
-        )
-        self.scale_x_entry = DirectEntry(
-            parent=self.ui_frame,
-            initialText="1.0",
-            scale=0.04,
-            pos=(0.6, 0, 0.15),
-            numLines=1,
-            focus=0
-        )
-        self.scale_y_entry = DirectEntry(
-            parent=self.ui_frame,
-            initialText="1.0",
-            scale=0.04,
-            pos=(0.8, 0, 0.15),
-            numLines=1,
-            focus=0
-        )
-        self.scale_z_entry = DirectEntry(
-            parent=self.ui_frame,
-            initialText="1.0",
-            scale=0.04,
-            pos=(1.0, 0, 0.15),
-            numLines=1,
-            focus=0
-        )
-        
-        # Button to apply the edited transform to the selected joint.
-        self.apply_transform_button = DirectButton(
-            parent=self.ui_frame,
-            text="Apply Transform",
-            scale=0.05,
-            pos=(0.6, 0, 0.05),
-            command=self.apply_transform
-        )
-    
-    def on_slider_update(self):
-        """Called when the timeline slider is moved."""
-        current_time = self.timeline_slider['value']
-        self.slider_label['text'] = f"Time: {current_time:.2f}"
-        self.preview_at_time(current_time)
-    
-    def on_joint_select(self, joint_name):
-        """Called when a joint is selected from the dropdown."""
-        self.selected_joint = joint_name
-        # Attach the marker to the selected joint to highlight it.
-        joint_np = self.controlled_joints[joint_name]
-        self.joint_marker.reparentTo(joint_np)
-        self.joint_marker.setPos(0, 0, 0)  # Position marker at the joint's origin.
-        self.joint_marker.show()
-        self.update_joint_details()
-        self.update_transform_entries()  # Update the edit fields with current transform.
-    
-    def update_joint_details(self):
-        """Updates the joint details label with the current transform of the selected joint."""
-        if self.selected_joint:
-            joint_np = self.controlled_joints[self.selected_joint]
+            name = joint.getName()
+            controlled = self.actor.controlJoint(None, 'modelRoot', name)
+            self.controlled_joints[name] = controlled
+            self.joint_combo.addItem(name)
+        if self.joint_combo.count() > 0:
+            self.joint_combo.setCurrentIndex(0)
+            self.on_joint_selected(0)
+
+    def select_model(self):
+        """
+        Opens a file dialog to select a model file and loads it as the actor.
+        """
+        fileName, _ = QFileDialog.getOpenFileName(self, "Select Model", "", "Model Files (*.egg *.bam *.obj)")
+        if fileName:
+            self.load_actor_model(fileName)
+
+    def load_actor_model(self, model_path):
+        """
+        Loads a new actor from the given model path, reparents it to the world's render,
+        and sets up joints for full joint control.
+        """
+        if hasattr(self, "actor") and self.actor:
+            self.actor.removeNode()
+        self.actor = Actor(model_path)
+        self.actor.reparentTo(self.panda3DWorld.render)
+        self.actor.setScale(0.005)
+        self.actor.setPos(0, 10, 0)
+        self.actor.setHpr(0, 0, 0)
+        self.setup_joints()
+        print(f"Loaded model: {model_path}")
+
+    def on_joint_selected(self, index):
+        """
+        When a joint is selected from the combo box, update the joint editing fields
+        and (if gizmos are active) reposition the gizmo group.
+        """
+        joint_name = self.joint_combo.currentText()
+        if joint_name in self.controlled_joints:
+            joint_np = self.controlled_joints[joint_name]
             pos = joint_np.getPos()
             hpr = joint_np.getHpr()
             scale = joint_np.getScale()
-            details = (f"Joint: {self.selected_joint}\n"
-                       f"Pos: ({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f})\n"
-                       f"Hpr: ({hpr[0]:.2f}, {hpr[1]:.2f}, {hpr[2]:.2f})\n"
-                       f"Scale: ({scale[0]:.2f}, {scale[1]:.2f}, {scale[2]:.2f})")
-            self.joint_details_label['text'] = details
-    
-    def update_transform_entries(self):
-        """Populates the transform editing fields with the current transform of the selected joint."""
-        if self.selected_joint:
-            joint_np = self.controlled_joints[self.selected_joint]
-            pos = joint_np.getPos()
-            hpr = joint_np.getHpr()
-            scale = joint_np.getScale()
-            self.pos_x_entry.enterText(f"{pos[0]:.2f}")
-            self.pos_y_entry.enterText(f"{pos[1]:.2f}")
-            self.pos_z_entry.enterText(f"{pos[2]:.2f}")
-            self.rot_h_entry.enterText(f"{hpr[0]:.2f}")
-            self.rot_p_entry.enterText(f"{hpr[1]:.2f}")
-            self.rot_r_entry.enterText(f"{hpr[2]:.2f}")
-            self.scale_x_entry.enterText(f"{scale[0]:.2f}")
-            self.scale_y_entry.enterText(f"{scale[1]:.2f}")
-            self.scale_z_entry.enterText(f"{scale[2]:.2f}")
-    
-    def apply_transform(self):
-        """Reads values from the editing fields and applies them to the selected joint."""
-        if self.selected_joint:
+            self.joint_pos_x.setText(f"{pos[0]:.2f}")
+            self.joint_pos_y.setText(f"{pos[1]:.2f}")
+            self.joint_pos_z.setText(f"{pos[2]:.2f}")
+            self.joint_rot_h.setText(f"{hpr[0]:.2f}")
+            self.joint_rot_p.setText(f"{hpr[1]:.2f}")
+            self.joint_rot_r.setText(f"{hpr[2]:.2f}")
+            self.joint_scale_x.setText(f"{scale[0]:.2f}")
+            self.joint_scale_y.setText(f"{scale[1]:.2f}")
+            self.joint_scale_z.setText(f"{scale[2]:.2f}")
+            if self.gizmo_active:
+                self.update_gizmos_position(joint_np)
+
+    def apply_joint_transform(self):
+        """
+        Reads the joint editing fields and applies the transform to the selected joint.
+        """
+        joint_name = self.joint_combo.currentText()
+        if joint_name in self.controlled_joints:
             try:
-                new_pos = (
-                    float(self.pos_x_entry.get()),
-                    float(self.pos_y_entry.get()),
-                    float(self.pos_z_entry.get())
-                )
-                new_hpr = (
-                    float(self.rot_h_entry.get()),
-                    float(self.rot_p_entry.get()),
-                    float(self.rot_r_entry.get())
-                )
-                new_scale = (
-                    float(self.scale_x_entry.get()),
-                    float(self.scale_y_entry.get()),
-                    float(self.scale_z_entry.get())
-                )
-                joint_np = self.controlled_joints[self.selected_joint]
-                joint_np.setPos(new_pos)
-                joint_np.setHpr(new_hpr)
-                joint_np.setScale(new_scale)
-                print(f"Applied new transform to {self.selected_joint}: pos={new_pos}, hpr={new_hpr}, scale={new_scale}")
-                self.update_joint_details()
+                pos = (float(self.joint_pos_x.text()),
+                       float(self.joint_pos_y.text()),
+                       float(self.joint_pos_z.text()))
+                hpr = (float(self.joint_rot_h.text()),
+                       float(self.joint_rot_p.text()),
+                       float(self.joint_rot_r.text()))
+                scale = (float(self.joint_scale_x.text()),
+                         float(self.joint_scale_y.text()),
+                         float(self.joint_scale_z.text()))
             except ValueError:
-                print("Invalid transform values. Please enter numeric values.")
-    
-    def update_joint_task(self, task):
-        """Task that continuously updates the selected joint details."""
-        if self.selected_joint:
-            self.update_joint_details()
-        return task.cont
-    
+                print("Invalid joint transform values.")
+                return
+            joint_np = self.controlled_joints[joint_name]
+            joint_np.setPos(pos)
+            joint_np.setHpr(hpr)
+            joint_np.setScale(scale)
+            print(f"Applied transform to joint '{joint_name}': pos={pos}, hpr={hpr}, scale={scale}")
+            if self.gizmo_active:
+                self.update_gizmos_position(joint_np)
+
+    def on_slider_change(self, value):
+        """
+        Called when the timeline slider is moved.
+        The slider value is interpreted as time in hundredths of a second.
+        """
+        current_time = value / 100.0
+        self.timeline_label.setText(f"Time: {current_time:.2f}")
+        self.preview_at_time(current_time)
+
     def add_keyframe(self):
         """
-        Adds a keyframe at the current slider time. Captures:
-          - Actor's global transform.
-          - Each controlled joint's (bone's) transform.
+        Adds a keyframe capturing the actor’s current transform and all joint transforms.
         """
-        current_time = self.timeline_slider['value']
+        t = self.timeline_slider.value() / 100.0
         keyframe = {
-            "time": current_time,
+            "time": t,
             "pos": tuple(self.actor.getPos()),
             "hpr": tuple(self.actor.getHpr()),
             "scale": tuple(self.actor.getScale()),
-            "bones": {}
+            "joints": {}
         }
-        for bone_name, joint in self.controlled_joints.items():
-            keyframe["bones"][bone_name] = {
-                "pos": tuple(joint.getPos()),
-                "hpr": tuple(joint.getHpr()),
-                "scale": tuple(joint.getScale())
+        for name, joint_np in self.controlled_joints.items():
+            keyframe["joints"][name] = {
+                "pos": tuple(joint_np.getPos()),
+                "hpr": tuple(joint_np.getHpr()),
+                "scale": tuple(joint_np.getScale())
             }
         self.keyframes.append(keyframe)
         self.keyframes.sort(key=lambda k: k["time"])
-        self.update_keyframes_display()
-        print(f"Added keyframe at t={current_time:.2f}")
-    
+        self.update_keyframe_list()
+        print(f"Added keyframe at time {t:.2f}")
+
     def remove_last_keyframe(self):
         """Removes the last keyframe, if any."""
         if self.keyframes:
             removed = self.keyframes.pop()
-            self.update_keyframes_display()
-            print(f"Removed keyframe at t={removed['time']:.2f}")
+            self.update_keyframe_list()
+            print(f"Removed keyframe at time {removed['time']:.2f}")
         else:
             print("No keyframes to remove.")
-    
-    def update_keyframes_display(self):
-        """Updates the keyframes display label."""
-        self.keyframes_label['text'] = self.get_keyframes_text()
-    
-    def get_keyframes_text(self):
-        """Returns a string listing all keyframes (global transform and controlled bone keys)."""
-        if not self.keyframes:
-            return "No keyframes."
-        text = "Keyframes:\n"
+
+    def update_keyframe_list(self):
+        """Updates the QListWidget with the list of keyframes."""
+        self.keyframe_list.clear()
         for kf in self.keyframes:
-            bones_list = list(kf["bones"].keys())
-            text += (f"t: {kf['time']:.2f} | pos: ({kf['pos'][0]:.2f}, {kf['pos'][1]:.2f}, {kf['pos'][2]:.2f})"
-                     f" | hpr: ({kf['hpr'][0]:.2f}, {kf['hpr'][1]:.2f}, {kf['hpr'][2]:.2f})"
-                     f" | scale: ({kf['scale'][0]:.2f}, {kf['scale'][1]:.2f}, {kf['scale'][2]:.2f})"
-                     f" | bones: {bones_list}\n")
-        return text
-    
-    def play_sequence(self):
-        """
-        Builds and plays a Panda3D Sequence from keyframes.
-        For each segment between keyframes, a Parallel interval is created that interpolates
-        both the actor's global transform and every controlled bone's transform.
-        """
-        if not self.keyframes:
-            print("No keyframes to play.")
-            return
-        
-        if self.sequence:
-            self.sequence.finish()
-        
-        intervals = []
-        self.keyframes.sort(key=lambda k: k["time"])
-        
-        # Helper function to create a hold interval for a keyframe.
-        def create_hold_interval(kf, duration):
-            global_hold = Parallel(
-                LerpPosInterval(self.actor, duration, kf["pos"]),
-                LerpHprInterval(self.actor, duration, kf["hpr"]),
-                LerpScaleInterval(self.actor, duration, kf["scale"])
-            )
-            bone_intervals = []
-            for bone_name, bone_tf in kf["bones"].items():
-                joint = self.controlled_joints[bone_name]
-                bone_interval = Parallel(
-                    LerpPosInterval(joint, duration, bone_tf["pos"]),
-                    LerpHprInterval(joint, duration, bone_tf["hpr"]),
-                    LerpScaleInterval(joint, duration, bone_tf["scale"])
-                )
-                bone_intervals.append(bone_interval)
-            return Parallel(global_hold, *bone_intervals)
-        
-        # If the first keyframe isn’t at time 0, hold its transform.
-        if self.keyframes[0]["time"] > 0:
-            duration = self.keyframes[0]["time"]
-            intervals.append(create_hold_interval(self.keyframes[0], duration))
-        
-        # Create intervals between consecutive keyframes.
-        for i in range(len(self.keyframes) - 1):
-            start_kf = self.keyframes[i]
-            end_kf = self.keyframes[i+1]
-            duration = end_kf["time"] - start_kf["time"]
-            
-            global_interval = Parallel(
-                LerpPosInterval(self.actor, duration, end_kf["pos"], startPos=start_kf["pos"]),
-                LerpHprInterval(self.actor, duration, end_kf["hpr"], startHpr=start_kf["hpr"]),
-                LerpScaleInterval(self.actor, duration, end_kf["scale"], startScale=start_kf["scale"])
-            )
-            bone_intervals = []
-            for bone_name, start_bone in start_kf["bones"].items():
-                end_bone = end_kf["bones"].get(bone_name)
-                if end_bone is not None:
-                    joint = self.controlled_joints[bone_name]
-                    bone_interval = Parallel(
-                        LerpPosInterval(joint, duration, end_bone["pos"], startPos=start_bone["pos"]),
-                        LerpHprInterval(joint, duration, end_bone["hpr"], startHpr=start_bone["hpr"]),
-                        LerpScaleInterval(joint, duration, end_bone["scale"], startScale=start_bone["scale"])
-                    )
-                    bone_intervals.append(bone_interval)
-            segment_interval = Parallel(global_interval, *bone_intervals)
-            intervals.append(segment_interval)
-        
-        # If the last keyframe is before the end of the timeline, hold its transform.
-        if self.keyframes[-1]["time"] < self.timeline_duration:
-            duration = self.timeline_duration - self.keyframes[-1]["time"]
-            intervals.append(create_hold_interval(self.keyframes[-1], duration))
-        
-        self.sequence = Sequence(*intervals)
-        print("Playing sequence.")
-        self.sequence.start()
-    
+            self.keyframe_list.addItem(f"t: {kf['time']:.2f} | pos: {kf['pos']}")
+
     def preview_at_time(self, current_time):
         """
-        Updates the actor's and all bones' transforms based on linear interpolation
-        between keyframes. This provides a live preview as the user scrubs the timeline.
+        Interpolates between keyframes to preview the actor's and joints' transforms at the given time.
         """
         if not self.keyframes:
             return
-        
+
+        # Global actor transform
         if current_time <= self.keyframes[0]["time"]:
             kf = self.keyframes[0]
             self.actor.setPos(kf["pos"])
             self.actor.setHpr(kf["hpr"])
             self.actor.setScale(kf["scale"])
-            for bone_name, bone_tf in kf["bones"].items():
-                self.controlled_joints[bone_name].setPos(bone_tf["pos"])
-                self.controlled_joints[bone_name].setHpr(bone_tf["hpr"])
-                self.controlled_joints[bone_name].setScale(bone_tf["scale"])
+            for name, trans in kf.get("joints", {}).items():
+                if name in self.controlled_joints:
+                    self.controlled_joints[name].setPos(trans["pos"])
+                    self.controlled_joints[name].setHpr(trans["hpr"])
+                    self.controlled_joints[name].setScale(trans["scale"])
             return
-        
+
         if current_time >= self.keyframes[-1]["time"]:
             kf = self.keyframes[-1]
             self.actor.setPos(kf["pos"])
             self.actor.setHpr(kf["hpr"])
             self.actor.setScale(kf["scale"])
-            for bone_name, bone_tf in kf["bones"].items():
-                self.controlled_joints[bone_name].setPos(bone_tf["pos"])
-                self.controlled_joints[bone_name].setHpr(bone_tf["hpr"])
-                self.controlled_joints[bone_name].setScale(bone_tf["scale"])
+            for name, trans in kf.get("joints", {}).items():
+                if name in self.controlled_joints:
+                    self.controlled_joints[name].setPos(trans["pos"])
+                    self.controlled_joints[name].setHpr(trans["hpr"])
+                    self.controlled_joints[name].setScale(trans["scale"])
             return
-        
+
         for i in range(len(self.keyframes) - 1):
             start_kf = self.keyframes[i]
-            end_kf = self.keyframes[i+1]
+            end_kf = self.keyframes[i + 1]
             if start_kf["time"] <= current_time <= end_kf["time"]:
                 t = (current_time - start_kf["time"]) / (end_kf["time"] - start_kf["time"])
                 new_pos = lerp_tuple(start_kf["pos"], end_kf["pos"], t)
@@ -508,18 +342,260 @@ class SequenceEditor(ShowBase):
                 self.actor.setPos(new_pos)
                 self.actor.setHpr(new_hpr)
                 self.actor.setScale(new_scale)
-                for bone_name in start_kf["bones"]:
-                    start_bone = start_kf["bones"][bone_name]
-                    end_bone = end_kf["bones"].get(bone_name)
-                    if end_bone is not None:
-                        bone_pos = lerp_tuple(start_bone["pos"], end_bone["pos"], t)
-                        bone_hpr = lerp_tuple(start_bone["hpr"], end_bone["hpr"], t)
-                        bone_scale = lerp_tuple(start_bone["scale"], end_bone["scale"], t)
-                        self.controlled_joints[bone_name].setPos(bone_pos)
-                        self.controlled_joints[bone_name].setHpr(bone_hpr)
-                        self.controlled_joints[bone_name].setScale(bone_scale)
+                # Interpolate joints.
+                for name in self.controlled_joints.keys():
+                    if name in start_kf["joints"] and name in end_kf["joints"]:
+                        start_joint = start_kf["joints"][name]
+                        end_joint = end_kf["joints"][name]
+                        joint_pos = lerp_tuple(start_joint["pos"], end_joint["pos"], t)
+                        joint_hpr = lerp_tuple(start_joint["hpr"], end_joint["hpr"], t)
+                        joint_scale = lerp_tuple(start_joint["scale"], end_joint["scale"], t)
+                        self.controlled_joints[name].setPos(joint_pos)
+                        self.controlled_joints[name].setHpr(joint_hpr)
+                        self.controlled_joints[name].setScale(joint_scale)
                 break
 
+    def play_sequence(self):
+        """
+        Creates and plays a Panda3D Sequence that interpolates the actor’s and joints' transforms
+        through all keyframes.
+        """
+        if not self.keyframes:
+            print("No keyframes to play.")
+            return
+        
+        if self.sequence:
+            self.sequence.finish()
+
+        intervals = []
+        if self.keyframes[0]["time"] > 0:
+            duration = self.keyframes[0]["time"]
+            intervals.append(Parallel(
+                LerpPosInterval(self.actor, duration, self.keyframes[0]["pos"], startPos=self.actor.getPos()),
+                LerpHprInterval(self.actor, duration, self.keyframes[0]["hpr"], startHpr=self.actor.getHpr()),
+                LerpScaleInterval(self.actor, duration, self.keyframes[0]["scale"], startScale=self.actor.getScale())
+            ))
+        for i in range(len(self.keyframes) - 1):
+            start_kf = self.keyframes[i]
+            end_kf = self.keyframes[i + 1]
+            duration = end_kf["time"] - start_kf["time"]
+            intervals.append(Parallel(
+                LerpPosInterval(self.actor, duration, end_kf["pos"], startPos=start_kf["pos"]),
+                LerpHprInterval(self.actor, duration, end_kf["hpr"], startHpr=start_kf["hpr"]),
+                LerpScaleInterval(self.actor, duration, end_kf["scale"], startScale=start_kf["scale"])
+            ))
+        if self.keyframes[-1]["time"] < self.timeline_duration:
+            duration = self.timeline_duration - self.keyframes[-1]["time"]
+            intervals.append(Parallel(
+                LerpPosInterval(self.actor, duration, self.keyframes[-1]["pos"]),
+                LerpHprInterval(self.actor, duration, self.keyframes[-1]["hpr"]),
+                LerpScaleInterval(self.actor, duration, self.keyframes[-1]["scale"])
+            ))
+        
+        self.sequence = Sequence(*intervals)
+        self.sequence.start()
+        self.playing = True
+        self.timer.start(100)
+
+    def update_playback(self):
+        """Stops the timer when the sequence finishes."""
+        if self.sequence and not self.sequence.isPlaying():
+            self.timer.stop()
+            self.playing = False
+
+    # === Gizmo Functionality for Joint Translation ===
+    def create_translation_gizmos(self):
+        """
+        Creates simple arrow gizmos (one per axis) for translation.
+        For this example, we load an arrow model and color it appropriately.
+        """
+        self.gizmo_arrows = {}
+        axes = ["x", "y", "z"]
+        colors = {"x": (1,0,0,1), "y": (0,1,0,1), "z": (0,0,1,1)}
+        hpr_values = {"x": (0,0,-90), "y": (0,0,0), "z": (90,0,0)}
+        for axis in axes:
+            arrow = loader.loadModel("./editor_models/arrow")
+            arrow.setColor(*colors[axis])
+            arrow.setScale(0.2)
+            arrow.setHpr(hpr_values[axis])
+            arrow.reparentTo(self.panda3DWorld.render)
+            arrow.hide()
+            # Tag the gizmo with its axis for picking.
+            arrow.setTag("gizmo_axis", axis)
+            self.gizmo_arrows[axis] = arrow
+
+    def update_gizmos_position(self, joint_np):
+        """
+        Positions the gizmos at the selected joint's world position.
+        """
+        pos = joint_np.getPos(self.panda3DWorld.render)
+        for arrow in self.gizmo_arrows.values():
+            arrow.setPos(pos)
+            arrow.show()
+
+    def setup_gizmo_collision(self):
+        """
+        Sets up a collision traverser and queue for gizmo picking.
+        (A full implementation would attach collision solids to the gizmo models.)
+        """
+        self.cTrav = CollisionTraverser()
+        self.gizmoPickerQueue = CollisionHandlerQueue()
+        self.gizmoPickerRay = CollisionRay()
+        ray_node = CollisionNode('gizmoRay')
+        ray_node.addSolid(self.gizmoPickerRay)
+        ray_node.setFromCollideMask(BitMask32.bit(1))
+        ray_node.setIntoCollideMask(BitMask32.allOff())
+        self.gizmoPickerNP = self.panda3DWorld.render.attachNewNode(ray_node)
+        self.cTrav.addCollider(self.gizmoPickerNP, self.gizmoPickerQueue)
+        # Accept mouse click events on the QPanda3DWidget.
+        self.panda3DWorld.accept("mouse1", self._on_gizmo_click)
+        self.panda3DWorld.accept("mouse1-up", self._on_gizmo_click_up)
+        
+    def _on_gizmo_click(self, position):
+        self.mx, self.my = position['x'], position['y']
+        self.is_moving = True
+        self.on_gizmo_click()
+        self.panda3DWorld.add_task(self.drag_gizmo_task, "on_mouse_click", appendTask=True)
+    def _on_gizmo_click_up(self, position):
+        self.mx, self.my = position['x'], position['y']
+        self.is_moving = False
+
+    def on_gizmo_click(self):
+        """
+        Called when the user clicks in the 3D viewport.
+        Uses the collision system to check if a gizmo was clicked.
+        """
+        if not self.panda3DWorld.mouseWatcherNode.hasMouse():
+            return
+        mpos = self.panda3DWorld.mouseWatcherNode.getMouse()
+        self.gizmoPickerRay.setFromLens(self.panda3DWorld.camNode, mpos.getX(), mpos.getY())
+        self.cTrav.traverse(self.panda3DWorld.render)
+        if self.gizmoPickerQueue.getNumEntries() > 0:
+            self.gizmoPickerQueue.sortEntries()
+            picked = self.gizmoPickerQueue.getEntry(0).getIntoNodePath()
+            axis = picked.findNetTag("gizmo_axis").getTag("gizmo_axis")
+            if axis:
+                print(f"Clicked gizmo for axis: {axis}")
+                self.current_drag_axis = axis
+                # Start tracking mouse movement.
+                self.panda3DWorld.accept("mouse1-up", self.end_gizmo_drag)
+                self.task = self.panda3DWorld.taskMgr.add(self.drag_gizmo_task, "DragGizmoTask")
+
+    def drag_gizmo_task(self, task):
+        """
+        Called every frame while dragging a gizmo.
+        Updates the selected joint's position along the gizmo's axis.
+        (This is a simplified example that moves the joint along one axis based on mouse X delta.)
+        """
+        if not self.panda3DWorld.mouseWatcherNode.hasMouse():
+            return task.cont
+        if self.is_moving == False:
+            task.remove(task)
+        mpos = self.panda3DWorld.mouseWatcherNode.getMouse()
+        # Compute a simple delta value (this is a simplistic implementation).
+        delta = mpos.getX() * 0.1  # scale factor for movement
+        joint_name = self.joint_combo.currentText()
+        if joint_name in self.controlled_joints:
+            joint_np = self.controlled_joints[joint_name]
+            pos = joint_np.getPos()
+            if self.current_drag_axis == "x":
+                new_pos = (pos[0] + delta, pos[1], pos[2])
+                joint_np.setPos(new_pos)
+                self.joint_pos_x.setText(f"{new_pos[0]:.2f}")
+                self.joint_pos_y.setText(f"{new_pos[1]:.2f}")
+                self.joint_pos_z.setText(f"{new_pos[2]:.2f}")
+            elif self.current_drag_axis == "y":
+                new_pos = (pos[0], pos[1] + delta, pos[2])
+                joint_np.setPos(new_pos)
+                self.joint_pos_x.setText(f"{new_pos[0]:.2f}")
+                self.joint_pos_y.setText(f"{new_pos[1]:.2f}")
+                self.joint_pos_z.setText(f"{new_pos[2]:.2f}")
+            elif self.current_drag_axis == "z":
+                new_pos = (pos[0], pos[1], pos[2] + delta)
+                joint_np.setPos(new_pos)
+                # Also update the joint position fields.
+                self.joint_pos_x.setText(f"{new_pos[0]:.2f}")
+                self.joint_pos_y.setText(f"{new_pos[1]:.2f}")
+                self.joint_pos_z.setText(f"{new_pos[2]:.2f}")
+        return task.cont
+
+    def end_gizmo_drag(self):
+        """
+        Called when the user releases the mouse button to end gizmo dragging.
+        """
+        self.current_drag_axis = None
+        self.panda_widget.ignore("mouse1-up")
+        if hasattr(self, "task"):
+            self.panda3DWorld.taskMgr.remove(self.task)
+
+    def toggle_gizmo(self, checked):
+        """
+        Toggles the visibility (and active status) of the translation gizmos.
+        When turned on, the gizmos are repositioned at the currently selected joint.
+        """
+        self.gizmo_active = checked
+        joint_name = self.joint_combo.currentText()
+        if joint_name in self.controlled_joints:
+            self.update_gizmos_position(self.controlled_joints[joint_name])
+        else:
+            for arrow in self.gizmo_arrows.values():
+                arrow.hide()
+
+    def play_sequence(self):
+        """
+        Creates and plays a Panda3D Sequence that interpolates the actor’s and joints' transforms
+        through all keyframes.
+        """
+        if not self.keyframes:
+            print("No keyframes to play.")
+            return
+        
+        if self.sequence:
+            self.sequence.finish()
+
+        intervals = []
+        if self.keyframes[0]["time"] > 0:
+            duration = self.keyframes[0]["time"]
+            intervals.append(Parallel(
+                LerpPosInterval(self.actor, duration, self.keyframes[0]["pos"], startPos=self.actor.getPos()),
+                LerpHprInterval(self.actor, duration, self.keyframes[0]["hpr"], startHpr=self.actor.getHpr()),
+                LerpScaleInterval(self.actor, duration, self.keyframes[0]["scale"], startScale=self.actor.getScale())
+            ))
+        for i in range(len(self.keyframes) - 1):
+            start_kf = self.keyframes[i]
+            end_kf = self.keyframes[i + 1]
+            duration = end_kf["time"] - start_kf["time"]
+            intervals.append(Parallel(
+                LerpPosInterval(self.actor, duration, end_kf["pos"], startPos=start_kf["pos"]),
+                LerpHprInterval(self.actor, duration, end_kf["hpr"], startHpr=start_kf["hpr"]),
+                LerpScaleInterval(self.actor, duration, end_kf["scale"], startScale=start_kf["scale"])
+            ))
+        if self.keyframes[-1]["time"] < self.timeline_duration:
+            duration = self.timeline_duration - self.keyframes[-1]["time"]
+            intervals.append(Parallel(
+                LerpPosInterval(self.actor, duration, self.keyframes[-1]["pos"]),
+                LerpHprInterval(self.actor, duration, self.keyframes[-1]["hpr"]),
+                LerpScaleInterval(self.actor, duration, self.keyframes[-1]["scale"])
+            ))
+        
+        self.sequence = Sequence(*intervals)
+        self.sequence.start()
+        self.playing = True
+        self.timer.start(100)
+
+    def update_playback(self):
+        """Stops the timer when the sequence finishes."""
+        if self.sequence and not self.sequence.isPlaying():
+            self.timer.stop()
+            self.playing = False
+
 if __name__ == "__main__":
-    app = SequenceEditor()
-    app.run()
+    app = QApplication(sys.argv)
+    # When instantiating, pass a Panda3D world object. For testing, create a dummy world.
+    from QPanda3D.Panda3DWorld import Panda3DWorld
+    dummy_world = Panda3DWorld(1024, 768)
+    editor_tab = SequenceEditorTab(dummy_world)
+    editor_tab.setWindowTitle("QPanda3D Sequence Editor Tab with Gizmos")
+    editor_tab.resize(1200, 800)
+    editor_tab.show()
+    sys.exit(app.exec_())

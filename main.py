@@ -29,7 +29,7 @@ from direct.gui.DirectGui import DirectButton, DirectLabel, DirectFrame
 from direct.gui import DirectGuiGlobals as DGG
 import input_manager
 import uuid
-
+import sequence_editor as sequenceEditorTab
 
 class PandaTest(Panda3DWorld):
     def __init__(self, width=1024, height=768, script_inspector=None):
@@ -464,6 +464,8 @@ class StartupWindow(QWidget):
         Creates a new project folder (inside ./saves) and initializes it with a basic scene.
         """
         global project_name, world
+        world.refresh()
+        world.reset_render()
         project_name = self.new_project_input.text().strip()
         if not project_name:
             QMessageBox.warning(self, "Invalid Name", "Please enter a valid project name.")
@@ -976,7 +978,8 @@ if __name__ == "__main__":
     
     #world.ui_editor_script_to_canvas()
     
-    
+    animator_tab = sequenceEditorTab.SequenceEditorTab(world)
+    tab_widget.addTab(animator_tab, "Animator") 
 
     prop = properties
     prop_ui_e = properties_ui_editor
