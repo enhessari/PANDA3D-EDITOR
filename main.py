@@ -425,10 +425,11 @@ class StartupWindow(QWidget):
             selected_item = self.project_list.currentItem()
             # Use the full project folder path stored in the item.
             project_path = selected_item.data(Qt.UserRole)
-            project_name = project_path  # Store full path for later use.
+            project_name = os.path.basename(project_path)  # Store full path for later use.
         else:
             selected_item = select
             project_path = select
+            project_name = select
         if not selected_item:
             QMessageBox.warning(self, "No Project Selected", "Please select a project to open.")
             return
@@ -455,7 +456,7 @@ class StartupWindow(QWidget):
         self.hide()
         ml = entity_editor.MapLoader(world)
         ml.load_map(map_path)
-        opened_map = map_path
+        opened_map = os.path.basename(map_path)
         QMessageBox.information(self, "Project Loaded", f"Project loaded from {map_path}")
 
     def create_project(self):
@@ -701,12 +702,33 @@ def startup_w():
 
 
 def save_map(map_name):
+    global world, project_name
     
-    global world
-    global project_name
-    entity_editor.Save(world).save_scene_to_toml(world.render, os.path.split(project_name)[0] + map_name)
-    entity_editor.Save(world).save_scene_to_map(os.path.split(project_name)[0] + map_name, os.path.split(project_name)[0] + "/" + map_name + '.map')
-
+    world.refresh()
+    world.reset_render()
+    # Define the base directories for the TOML and MAP files.
+    # (Here we use os.getcwd() to get the current working directory.
+    #  Adjust this as needed for your project structure.)
+    toml_base_dir = os.path.join(os.getcwd(), "toml_loader", project_name)
+    map_base_dir  = os.path.join(os.getcwd(), "saves", project_name)
+    
+    # Ensure these directories exist
+    os.makedirs(toml_base_dir, exist_ok=True)
+    os.makedirs(map_base_dir, exist_ok=True)
+    
+    # Build the full file paths.
+    # For example, if map_name is "Level1", the paths become:
+    #   .../toml_loader/MyProject/Level1.toml
+    #   .../saves/MyProject/Level1.map
+    toml_file_path = os.path.join(toml_base_dir, map_name)
+    map_file_path  = os.path.join(map_base_dir, map_name + ".map")
+    
+    # Save the scene.
+    # (Note: In your create_project function you used the toml path as the first
+    #  parameter for save_scene_to_map; we follow that pattern here.)
+    saver = entity_editor.Save(world)
+    saver.save_scene_to_toml(world.render, toml_file_path)
+    saver.save_scene_to_map(toml_file_path, map_file_path)
 
 def delete_selection():
     global world

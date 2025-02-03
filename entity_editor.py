@@ -143,7 +143,7 @@ class Load:
                 entity_node = root_node.attachNewNode(name)
                 if model_path and os.path.exists(model_path):
                     # Load and reparent the model.
-                    model = loader.loadModel(model_path)
+                    model = loader.loadModel(os.path.relpath(model_path))
                     model.reparentTo(entity_node)
                     print(f"✅ Loaded model for {name}: {model_path}")
                 else:
