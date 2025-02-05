@@ -22,21 +22,21 @@ class Drag_and_drop_ui_editor:
         self.draggable = False
         self.is_moving = False
         
-        self.collision_traverser = CollisionTraverser()
-        self.collision_handler = CollisionHandlerQueue()
+        #self.collision_traverser = CollisionTraverser()
+        #self.collision_handler = CollisionHandlerQueue()
+        #
+        #self.mouse_ray = CollisionRay()
+        #self.mouse_node = CollisionNode('mouse_ray')
+        #self.mouse_node.add_solid(self.mouse_ray)
+        #self.mouse_node.set_from_collide_mask(BitMask32.bit(1))
+        #self.mouse_node.set_into_collide_mask(BitMask32.bit(1))
+        #self.mouse_node_path = self.world.camera.attach_new_node(self.mouse_node)
+#
+        #self.collision_traverser.add_collider(self.mouse_node_path, self.collision_handler)
         
-        self.mouse_ray = CollisionRay()
-        self.mouse_node = CollisionNode('mouse_ray')
-        self.mouse_node.add_solid(self.mouse_ray)
-        self.mouse_node.set_from_collide_mask(BitMask32.bit(1))
-        self.mouse_node.set_into_collide_mask(BitMask32.bit(1))
-        self.mouse_node_path = self.world.camera.attach_new_node(self.mouse_node)
-
-        self.collision_traverser.add_collider(self.mouse_node_path, self.collision_handler)
-        
-        self.world.accept("mouse1", self.start_holding)
-        self.world.accept('mouse1-up', self.stop_drag)
-        self.world.accept("mouse-move", self.mouse_move)
+        #self.world.accept("mouse1", self.start_holding)
+        #self.world.accept('mouse1-up', self.stop_drag)
+        #self.world.accept("mouse-move", self.mouse_move)
         
         # Create UI elements
         #self.label("hello world!", 0.1, parent=world.canvas)
@@ -404,6 +404,8 @@ class Drag_and_drop_ui_editor:
         self.mx, self.my = position['x'], position['y']
         self.is_moving = True
         self.world.add_task(self.drag_task, "on_mouse_click", appendTask=True)
+        self.world.add_task(self.world.animator_tab.drag_gizmo_task, "drag_task", appendTask=True)
+        
         self.height = 0.0
         self.holding = True
     

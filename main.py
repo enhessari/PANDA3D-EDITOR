@@ -30,6 +30,7 @@ from direct.gui import DirectGuiGlobals as DGG
 import input_manager
 import uuid
 import sequence_editor as sequenceEditorTab
+import raycasting
 
 class PandaTest(Panda3DWorld):
     def __init__(self, width=1024, height=768, script_inspector=None):
@@ -40,6 +41,12 @@ class PandaTest(Panda3DWorld):
         global input_manager_c
         self.network_manager = network_manager
         self.input_manager = input_manager_c
+        
+        self.animator_tab = sequenceEditorTab.SequenceEditorTab(self)
+        
+        
+        
+        #self.raycasting.set_gizmos(self.animator_tab.gizmo_parent)
         
 
         
@@ -121,6 +128,9 @@ class PandaTest(Panda3DWorld):
         self.hierarchy_tree = QTreeWidget()
         self.hierarchy_tree1 = QTreeWidget()
         
+    
+    def make_ray_caster(self):
+        self.raycasting = raycasting.Picker(self)
     
     def assign_id(self, nodepath: NodePath):
         nodepath.set_python_tag("scripts", [])
@@ -742,9 +752,9 @@ def build_project():
     os.system("python build.py")
 
 if __name__ == "__main__":
-    world = PandaTest()
     app = QApplication(sys.argv)
     appw = QMainWindow()
+    world = PandaTest()
     appw.setGeometry(50, 50, 1024, 768)
     
     # Main Widget
@@ -978,8 +988,8 @@ if __name__ == "__main__":
     
     #world.ui_editor_script_to_canvas()
     
-    animator_tab = sequenceEditorTab.SequenceEditorTab(world)
-    tab_widget.addTab(animator_tab, "Animator") 
+    
+    tab_widget.addTab(world.animator_tab, "Animator") 
 
     prop = properties
     prop_ui_e = properties_ui_editor
@@ -993,9 +1003,11 @@ if __name__ == "__main__":
     # Set the background color of the widget to gray
     qdarktheme.setup_theme()
     #apply_stylesheet(appw, theme="light_blue.xml")
+    
 
     # Show the application window
     startup_w()
+    world.make_ray_caster()
     
     appw.hide()
 

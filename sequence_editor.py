@@ -6,34 +6,41 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer
 
-# Import your QPanda3D widget – note that it requires a reference to the Panda3D world.
+# Import your QPanda3D widget – it must accept a world reference.
 from QPanda3D.QPanda3DWidget import QPanda3DWidget
 
 from direct.actor.Actor import Actor
 from direct.interval.IntervalGlobal import Sequence, Parallel, LerpPosInterval, LerpHprInterval, LerpScaleInterval
-from panda3d.core import Vec3, CollisionTraverser, CollisionNode, CollisionRay, CollisionHandlerQueue, BitMask32
+from panda3d.core import (
+    Vec3, Point3, CollisionTraverser, CollisionNode, CollisionRay,
+    CollisionHandlerQueue, BitMask32, CollisionTube, CollisionSphere
+)
 
 def lerp_tuple(start, end, t):
     """Linearly interpolates between two tuples element‐wise."""
     return tuple(s * (1 - t) + e * t for s, e in zip(start, end))
-
 
 class SequenceEditorTab(QWidget):
     def __init__(self, panda3DWorld, parent=None):
         """
         :param panda3DWorld: The Panda3D world instance (e.g., your PandaTest object)
         """
-        # Create gizmos for translation control.
+        # Gizmo state variables.
         self.gizmo_active = False
         self.current_drag_axis = None
+        self.last_mouse_pos = None
+        
+        self.gizmotask = True
+
+
         super(SequenceEditorTab, self).__init__(parent)
         self.panda3DWorld = panda3DWorld
 
-        # Main horizontal layout: left = 3D viewport, right = controls panel.
+
+        # --- Set up the main layout ---
         main_layout = QHBoxLayout(self)
         
-        # --- 3D Viewport (QPanda3D widget) ---
-        # Pass the required panda3DWorld to the QPanda3DWidget.
+        # --- 3D Viewport ---
         self.panda_widget = QPanda3DWidget(panda3DWorld)
         main_layout.addWidget(self.panda_widget, 3)
         
@@ -42,17 +49,17 @@ class SequenceEditorTab(QWidget):
         controls_layout = QVBoxLayout(controls_panel)
         main_layout.addWidget(controls_panel, 1)
         
-        # Timeline slider and label
+        # Timeline slider and label.
         self.timeline_label = QLabel("Time: 0.00")
         controls_layout.addWidget(self.timeline_label)
         self.timeline_slider = QSlider(Qt.Horizontal)
         self.timeline_slider.setMinimum(0)
-        self.timeline_slider.setMaximum(1500)  # 0–1500 represents 0.0 to 15.0 seconds
+        self.timeline_slider.setMaximum(1500)  # Represents 0.0 to 15.0 seconds (scaled by 100)
         self.timeline_slider.setValue(0)
         self.timeline_slider.valueChanged.connect(self.on_slider_change)
         controls_layout.addWidget(self.timeline_slider)
         
-        # Buttons for keyframe management
+        # Keyframe management buttons.
         self.add_keyframe_btn = QPushButton("Add Keyframe")
         self.add_keyframe_btn.clicked.connect(self.add_keyframe)
         controls_layout.addWidget(self.add_keyframe_btn)
@@ -65,25 +72,24 @@ class SequenceEditorTab(QWidget):
         self.play_btn.clicked.connect(self.play_sequence)
         controls_layout.addWidget(self.play_btn)
         
-        # List widget to display keyframes
+        # Keyframe list.
         self.keyframe_list = QListWidget()
         controls_layout.addWidget(QLabel("Keyframes"))
         controls_layout.addWidget(self.keyframe_list)
         
-        # --- Model Selection Section ---
+        # Model selection section.
         self.select_model_btn = QPushButton("Select Model")
         self.select_model_btn.clicked.connect(self.select_model)
         controls_layout.addWidget(self.select_model_btn)
         
-        # --- Joint/Bone Control Section ---
+        # Joint/Bone control section.
         self.joint_control_label = QLabel("Joint Control:")
         controls_layout.addWidget(self.joint_control_label)
-        
         self.joint_combo = QComboBox()
         controls_layout.addWidget(self.joint_combo)
         self.joint_combo.currentIndexChanged.connect(self.on_joint_selected)
         
-        # Joint Position fields
+        # Joint position fields.
         self.joint_pos_label = QLabel("Joint Pos (x,y,z):")
         controls_layout.addWidget(self.joint_pos_label)
         self.joint_pos_x = QLineEdit("0.0")
@@ -95,7 +101,7 @@ class SequenceEditorTab(QWidget):
         joint_pos_layout.addWidget(self.joint_pos_z)
         controls_layout.addLayout(joint_pos_layout)
         
-        # Joint Rotation fields
+        # Joint rotation fields.
         self.joint_rot_label = QLabel("Joint Rot (h,p,r):")
         controls_layout.addWidget(self.joint_rot_label)
         self.joint_rot_h = QLineEdit("0.0")
@@ -107,7 +113,7 @@ class SequenceEditorTab(QWidget):
         joint_rot_layout.addWidget(self.joint_rot_r)
         controls_layout.addLayout(joint_rot_layout)
         
-        # Joint Scale fields
+        # Joint scale fields.
         self.joint_scale_label = QLabel("Joint Scale (x,y,z):")
         controls_layout.addWidget(self.joint_scale_label)
         self.joint_scale_x = QLineEdit("1.0")
@@ -123,7 +129,7 @@ class SequenceEditorTab(QWidget):
         self.apply_joint_transform_btn.clicked.connect(self.apply_joint_transform)
         controls_layout.addWidget(self.apply_joint_transform_btn)
         
-        # --- Gizmo Controls Section (for visual interactive joint manipulation) ---
+        # Gizmo toggle button.
         self.gizmo_toggle_btn = QPushButton("Toggle Translation Gizmo")
         self.gizmo_toggle_btn.setCheckable(True)
         self.gizmo_toggle_btn.clicked.connect(self.toggle_gizmo)
@@ -136,26 +142,22 @@ class SequenceEditorTab(QWidget):
         
         # --- Keyframe Data ---
         self.keyframes = []
-        self.timeline_duration = 15.0  # seconds
+        self.timeline_duration = 15.0  # seconds.
         self.sequence = None
         
-        # Timer for updating UI during playback (optional)
+        # Timer for playback updates.
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_playback)
         self.playing = False
 
-        # Setup collision traverser and handler for gizmo picking.
-        self.setup_gizmo_collision()
-
+        # --- Gizmo Setup ---
         self.create_translation_gizmos()
 
+        # Accept mouse1 events from the Panda3D world.
+        #self.panda3DWorld.accept("mouse1", self._on_gizmo_click)
+
     def setup_scene(self):
-        """
-        Initializes the Panda3D scene.
-        Loads an Actor (using a default model) and reparents it to the world's render node.
-        Also sets up controlled joints for full joint/bone control.
-        """
-        # Load a default actor.
+        """Loads a default actor and sets up joints."""
         self.actor = Actor("models/panda-model")
         self.actor.reparentTo(self.panda3DWorld.render)
         self.actor.setScale(0.005)
@@ -164,10 +166,7 @@ class SequenceEditorTab(QWidget):
         self.setup_joints()
 
     def setup_joints(self):
-        """
-        Sets up controlled joints so that each joint can be manipulated.
-        Populates self.controlled_joints and fills the joint selection combo box.
-        """
+        """Controls all joints and populates the joint selection combo."""
         self.controlled_joints = {}
         self.joint_combo.clear()
         for joint in self.actor.getJoints():
@@ -180,18 +179,13 @@ class SequenceEditorTab(QWidget):
             self.on_joint_selected(0)
 
     def select_model(self):
-        """
-        Opens a file dialog to select a model file and loads it as the actor.
-        """
+        """Opens a file dialog and loads a new model."""
         fileName, _ = QFileDialog.getOpenFileName(self, "Select Model", "", "Model Files (*.egg *.bam *.obj)")
         if fileName:
             self.load_actor_model(fileName)
 
     def load_actor_model(self, model_path):
-        """
-        Loads a new actor from the given model path, reparents it to the world's render,
-        and sets up joints for full joint control.
-        """
+        """Loads and sets up a new actor."""
         if hasattr(self, "actor") and self.actor:
             self.actor.removeNode()
         self.actor = Actor(model_path)
@@ -203,10 +197,7 @@ class SequenceEditorTab(QWidget):
         print(f"Loaded model: {model_path}")
 
     def on_joint_selected(self, index):
-        """
-        When a joint is selected from the combo box, update the joint editing fields
-        and (if gizmos are active) reposition the gizmo group.
-        """
+        """Updates the joint transform fields and gizmo positions."""
         joint_name = self.joint_combo.currentText()
         if joint_name in self.controlled_joints:
             joint_np = self.controlled_joints[joint_name]
@@ -226,9 +217,7 @@ class SequenceEditorTab(QWidget):
                 self.update_gizmos_position(joint_np)
 
     def apply_joint_transform(self):
-        """
-        Reads the joint editing fields and applies the transform to the selected joint.
-        """
+        """Applies the transform values from the UI to the selected joint."""
         joint_name = self.joint_combo.currentText()
         if joint_name in self.controlled_joints:
             try:
@@ -253,18 +242,13 @@ class SequenceEditorTab(QWidget):
                 self.update_gizmos_position(joint_np)
 
     def on_slider_change(self, value):
-        """
-        Called when the timeline slider is moved.
-        The slider value is interpreted as time in hundredths of a second.
-        """
+        """Called when the timeline slider changes."""
         current_time = value / 100.0
         self.timeline_label.setText(f"Time: {current_time:.2f}")
         self.preview_at_time(current_time)
 
     def add_keyframe(self):
-        """
-        Adds a keyframe capturing the actor’s current transform and all joint transforms.
-        """
+        """Captures a keyframe (global and joint transforms)."""
         t = self.timeline_slider.value() / 100.0
         keyframe = {
             "time": t,
@@ -285,7 +269,7 @@ class SequenceEditorTab(QWidget):
         print(f"Added keyframe at time {t:.2f}")
 
     def remove_last_keyframe(self):
-        """Removes the last keyframe, if any."""
+        """Removes the last keyframe."""
         if self.keyframes:
             removed = self.keyframes.pop()
             self.update_keyframe_list()
@@ -294,19 +278,18 @@ class SequenceEditorTab(QWidget):
             print("No keyframes to remove.")
 
     def update_keyframe_list(self):
-        """Updates the QListWidget with the list of keyframes."""
+        """Updates the keyframe list widget."""
         self.keyframe_list.clear()
         for kf in self.keyframes:
             self.keyframe_list.addItem(f"t: {kf['time']:.2f} | pos: {kf['pos']}")
 
     def preview_at_time(self, current_time):
         """
-        Interpolates between keyframes to preview the actor's and joints' transforms at the given time.
+        Interpolates transforms between keyframes and applies them to the actor and joints.
         """
         if not self.keyframes:
             return
 
-        # Global actor transform
         if current_time <= self.keyframes[0]["time"]:
             kf = self.keyframes[0]
             self.actor.setPos(kf["pos"])
@@ -342,7 +325,6 @@ class SequenceEditorTab(QWidget):
                 self.actor.setPos(new_pos)
                 self.actor.setHpr(new_hpr)
                 self.actor.setScale(new_scale)
-                # Interpolate joints.
                 for name in self.controlled_joints.keys():
                     if name in start_kf["joints"] and name in end_kf["joints"]:
                         start_joint = start_kf["joints"][name]
@@ -357,8 +339,7 @@ class SequenceEditorTab(QWidget):
 
     def play_sequence(self):
         """
-        Creates and plays a Panda3D Sequence that interpolates the actor’s and joints' transforms
-        through all keyframes.
+        Plays a sequence interpolating the actor’s and joints' transforms.
         """
         if not self.keyframes:
             print("No keyframes to play.")
@@ -398,140 +379,149 @@ class SequenceEditorTab(QWidget):
         self.timer.start(100)
 
     def update_playback(self):
-        """Stops the timer when the sequence finishes."""
+        """Stops the timer when playback is finished, and updates gizmo positions."""
         if self.sequence and not self.sequence.isPlaying():
             self.timer.stop()
             self.playing = False
+        elif self.gizmo_active:
+            current_joint_name = self.joint_combo.currentText()
+            if current_joint_name in self.controlled_joints:
+                self.update_gizmos_position(self.controlled_joints[current_joint_name])
 
-    # === Gizmo Functionality for Joint Translation ===
     def create_translation_gizmos(self):
         """
-        Creates simple arrow gizmos (one per axis) for translation.
-        For this example, we load an arrow model and color it appropriately.
+        Creates arrow gizmos with collision geometry.
         """
+        self.gizmo_parent = self.panda3DWorld.render.attachNewNode("gizmo_parent")
         self.gizmo_arrows = {}
         axes = ["x", "y", "z"]
-        colors = {"x": (1,0,0,1), "y": (0,1,0,1), "z": (0,0,1,1)}
-        hpr_values = {"x": (0,0,-90), "y": (0,0,0), "z": (90,0,0)}
+        colors = {"x": (1, 0, 0, 1), "y": (0, 1, 0, 1), "z": (0, 0, 1, 1)}
+        hpr_values = {"x": (0, 0, -90), "y": (0, 0, 0), "z": (90, 0, 0)}
+
+        # Try to load the arrow model from a custom path.
+        try:
+            arrow_model = self.panda3DWorld.loader.loadModel("./editor_models/arrow")
+            arrow_model.setTag("arrow", "1")
+        except Exception as e:
+            print("Error loading arrow model, using fallback sphere:", e)
+            arrow_model = self.panda3DWorld.loader.loadModel("models/misc/sphere")
+
+        # Clear pre-existing nodes.
+        arrow_model.clearModelNodes()
+
+
         for axis in axes:
-            arrow = loader.loadModel("./editor_models/arrow")
-            arrow.setColor(*colors[axis])
-            arrow.setScale(0.2)
-            arrow.setHpr(hpr_values[axis])
+            arrow = arrow_model.copyTo(self.panda3DWorld.render)
             arrow.reparentTo(self.panda3DWorld.render)
+            arrow.setColor(*colors[axis])
+            arrow.setScale(0.5)  # Increase scale for visibility.
+            arrow.setHpr(hpr_values[axis])
             arrow.hide()
-            # Tag the gizmo with its axis for picking.
+            # Tag the arrow so we can identify its axis.
             arrow.setTag("gizmo_axis", axis)
+            arrow.setTag("arrow", axis)
             self.gizmo_arrows[axis] = arrow
+            arrow_model.set_collide_mask(BitMask32.bit(10))
+            arrow.set_collide_mask(BitMask32.bit(10))
+            print(f"Created gizmo for axis: {axis}")
+            bounds = arrow.getBounds()  # This returns a bounding volume (usually a sphere).
+            center = bounds.getCenter()  # Center in the arrow's coordinate space.
+            radius = bounds.getRadius()
+            if arrow.find("**/+CollisionNode").isEmpty():
+                print("is empty")
+                cn = CollisionNode(f"gizmo_{axis}_col")
+                cn.addSolid(CollisionSphere(0.5, 0.5, 0, radius))
+
+                cn.setFromCollideMask(BitMask32.bit(10))
+                cn.setIntoCollideMask(BitMask32.bit(10))
+                
+                cn.setCollideMask(BitMask32.bit(10))
+                cn.setTag("arrow", axis)
+                arrow.attachNewNode(cn)
 
     def update_gizmos_position(self, joint_np):
         """
-        Positions the gizmos at the selected joint's world position.
+        Parents the gizmos to the selected joint so that they automatically follow it.
         """
-        pos = joint_np.getPos(self.panda3DWorld.render)
+        if not joint_np:
+            return
         for arrow in self.gizmo_arrows.values():
-            arrow.setPos(pos)
+            # Here you can adjust the arrow's offset relative to the joint.
+            arrow.setPos(0, 0, 0)
+            arrow.setScale(1)
             arrow.show()
 
-    def setup_gizmo_collision(self):
-        """
-        Sets up a collision traverser and queue for gizmo picking.
-        (A full implementation would attach collision solids to the gizmo models.)
-        """
-        self.cTrav = CollisionTraverser()
-        self.gizmoPickerQueue = CollisionHandlerQueue()
-        self.gizmoPickerRay = CollisionRay()
-        ray_node = CollisionNode('gizmoRay')
-        ray_node.addSolid(self.gizmoPickerRay)
-        ray_node.setFromCollideMask(BitMask32.bit(1))
-        ray_node.setIntoCollideMask(BitMask32.allOff())
-        self.gizmoPickerNP = self.panda3DWorld.render.attachNewNode(ray_node)
-        self.cTrav.addCollider(self.gizmoPickerNP, self.gizmoPickerQueue)
-        # Accept mouse click events on the QPanda3DWidget.
-        self.panda3DWorld.accept("mouse1", self._on_gizmo_click)
-        self.panda3DWorld.accept("mouse1-up", self._on_gizmo_click_up)
-        
-    def _on_gizmo_click(self, position):
-        self.mx, self.my = position['x'], position['y']
-        self.is_moving = True
-        self.on_gizmo_click()
-        self.panda3DWorld.add_task(self.drag_gizmo_task, "on_mouse_click", appendTask=True)
-    def _on_gizmo_click_up(self, position):
-        self.mx, self.my = position['x'], position['y']
-        self.is_moving = False
+    def _on_gizmo_click(self, axis):
+        print(f"Clicked gizmo axis: {axis}")
+        self.current_drag_axis = axis
+        self.last_mouse_pos = self.panda3DWorld.mouseWatcherNode.getMouse()
+        self.panda3DWorld.taskMgr.add(self.drag_gizmo_task, "DragGizmoTask")
 
-    def on_gizmo_click(self):
+
+    def _on_gizmo_click_up(self):
         """
-        Called when the user clicks in the 3D viewport.
-        Uses the collision system to check if a gizmo was clicked.
+        Called on mouse release; stops gizmo dragging.
         """
-        if not self.panda3DWorld.mouseWatcherNode.hasMouse():
-            return
-        mpos = self.panda3DWorld.mouseWatcherNode.getMouse()
-        self.gizmoPickerRay.setFromLens(self.panda3DWorld.camNode, mpos.getX(), mpos.getY())
-        self.cTrav.traverse(self.panda3DWorld.render)
-        if self.gizmoPickerQueue.getNumEntries() > 0:
-            self.gizmoPickerQueue.sortEntries()
-            picked = self.gizmoPickerQueue.getEntry(0).getIntoNodePath()
-            axis = picked.findNetTag("gizmo_axis").getTag("gizmo_axis")
-            if axis:
-                print(f"Clicked gizmo for axis: {axis}")
-                self.current_drag_axis = axis
-                # Start tracking mouse movement.
-                self.panda3DWorld.accept("mouse1-up", self.end_gizmo_drag)
-                self.task = self.panda3DWorld.taskMgr.add(self.drag_gizmo_task, "DragGizmoTask")
+        self.current_drag_axis = None
+        self.panda3DWorld.ignore("mouse1-up")
+        if self.panda3DWorld.taskMgr.hasTaskNamed("DragGizmoTask"):
+            self.panda3DWorld.taskMgr.remove("DragGizmoTask")
+            
+    def start_gizmo_drag(self, collision_entry):
+        # You can use the collision_entry if you want to know which gizmo was hit.
+        picked_np = collision_entry.getIntoNodePath()
+        print("it doesn't")
+        if picked_np and not picked_np.hasTag("arrow"):
+            picked_np = picked_np.getParent()
+            print("it does")
+        if picked_np:
+            axis = picked_np.getTag("gizmo_axis")
+            print(f"Global picker reports gizmo axis hit: {axis}")
+            self.current_drag_axis = axis
+            self.last_mouse_pos = self.panda3DWorld.mouseWatcherNode.getMouse()
+            # Add your drag task. For example:
+            self.gizmotask = True
+            self.panda3DWorld.taskMgr.add(self.drag_gizmo_task, "drag_gizmo_task", appendTask=True)
+            
+    def stop_gizmo_task(self):
+        self.gizmotask = False
 
     def drag_gizmo_task(self, task):
         """
-        Called every frame while dragging a gizmo.
-        Updates the selected joint's position along the gizmo's axis.
-        (This is a simplified example that moves the joint along one axis based on mouse X delta.)
+        Called each frame while dragging a gizmo.
+        Computes the mouse delta and moves the joint along the selected axis.
         """
-        if not self.panda3DWorld.mouseWatcherNode.hasMouse():
-            return task.cont
-        if self.is_moving == False:
-            task.remove(task)
-        mpos = self.panda3DWorld.mouseWatcherNode.getMouse()
-        # Compute a simple delta value (this is a simplistic implementation).
-        delta = mpos.getX() * 0.1  # scale factor for movement
-        joint_name = self.joint_combo.currentText()
-        if joint_name in self.controlled_joints:
-            joint_np = self.controlled_joints[joint_name]
-            pos = joint_np.getPos()
-            if self.current_drag_axis == "x":
-                new_pos = (pos[0] + delta, pos[1], pos[2])
-                joint_np.setPos(new_pos)
-                self.joint_pos_x.setText(f"{new_pos[0]:.2f}")
-                self.joint_pos_y.setText(f"{new_pos[1]:.2f}")
-                self.joint_pos_z.setText(f"{new_pos[2]:.2f}")
-            elif self.current_drag_axis == "y":
-                new_pos = (pos[0], pos[1] + delta, pos[2])
-                joint_np.setPos(new_pos)
-                self.joint_pos_x.setText(f"{new_pos[0]:.2f}")
-                self.joint_pos_y.setText(f"{new_pos[1]:.2f}")
-                self.joint_pos_z.setText(f"{new_pos[2]:.2f}")
-            elif self.current_drag_axis == "z":
-                new_pos = (pos[0], pos[1], pos[2] + delta)
-                joint_np.setPos(new_pos)
-                # Also update the joint position fields.
-                self.joint_pos_x.setText(f"{new_pos[0]:.2f}")
-                self.joint_pos_y.setText(f"{new_pos[1]:.2f}")
-                self.joint_pos_z.setText(f"{new_pos[2]:.2f}")
-        return task.cont
+        if self.gizmotask:
+            current_mouse = self.panda3DWorld.mouseWatcherNode.getMouse()
+            delta = current_mouse - self.last_mouse_pos
+            self.last_mouse_pos = current_mouse
 
-    def end_gizmo_drag(self):
-        """
-        Called when the user releases the mouse button to end gizmo dragging.
-        """
-        self.current_drag_axis = None
-        self.panda_widget.ignore("mouse1-up")
-        if hasattr(self, "task"):
-            self.panda3DWorld.taskMgr.remove(self.task)
+            move_speed = 1.0  # Adjust as necessary.
+            movement = Vec3(0, 0, 0)
+            if self.current_drag_axis == "x":
+                movement = Vec3(delta.x * move_speed, 0, 0)
+            elif self.current_drag_axis == "y":
+                movement = Vec3(0, delta.x * move_speed, 0)
+            elif self.current_drag_axis == "z":
+                movement = Vec3(0, 0, delta.x * move_speed)
+
+            joint_name = self.joint_combo.currentText()
+            if joint_name in self.controlled_joints:
+                joint_np = self.controlled_joints[joint_name]
+                new_pos = joint_np.getPos() + movement
+                joint_np.setPos(new_pos)
+                self.joint_pos_x.setText(f"{new_pos[0]:.2f}")
+                self.joint_pos_y.setText(f"{new_pos[1]:.2f}")
+                self.joint_pos_z.setText(f"{new_pos[2]:.2f}")
+                self.update_gizmos_position(joint_np)
+            print("dragging gizmo")
+            return task.cont
+        else:
+            return task.done
 
     def toggle_gizmo(self, checked):
         """
-        Toggles the visibility (and active status) of the translation gizmos.
-        When turned on, the gizmos are repositioned at the currently selected joint.
+        Toggles gizmo visibility and updates its position.
         """
         self.gizmo_active = checked
         joint_name = self.joint_combo.currentText()
@@ -541,57 +531,8 @@ class SequenceEditorTab(QWidget):
             for arrow in self.gizmo_arrows.values():
                 arrow.hide()
 
-    def play_sequence(self):
-        """
-        Creates and plays a Panda3D Sequence that interpolates the actor’s and joints' transforms
-        through all keyframes.
-        """
-        if not self.keyframes:
-            print("No keyframes to play.")
-            return
-        
-        if self.sequence:
-            self.sequence.finish()
-
-        intervals = []
-        if self.keyframes[0]["time"] > 0:
-            duration = self.keyframes[0]["time"]
-            intervals.append(Parallel(
-                LerpPosInterval(self.actor, duration, self.keyframes[0]["pos"], startPos=self.actor.getPos()),
-                LerpHprInterval(self.actor, duration, self.keyframes[0]["hpr"], startHpr=self.actor.getHpr()),
-                LerpScaleInterval(self.actor, duration, self.keyframes[0]["scale"], startScale=self.actor.getScale())
-            ))
-        for i in range(len(self.keyframes) - 1):
-            start_kf = self.keyframes[i]
-            end_kf = self.keyframes[i + 1]
-            duration = end_kf["time"] - start_kf["time"]
-            intervals.append(Parallel(
-                LerpPosInterval(self.actor, duration, end_kf["pos"], startPos=start_kf["pos"]),
-                LerpHprInterval(self.actor, duration, end_kf["hpr"], startHpr=start_kf["hpr"]),
-                LerpScaleInterval(self.actor, duration, end_kf["scale"], startScale=start_kf["scale"])
-            ))
-        if self.keyframes[-1]["time"] < self.timeline_duration:
-            duration = self.timeline_duration - self.keyframes[-1]["time"]
-            intervals.append(Parallel(
-                LerpPosInterval(self.actor, duration, self.keyframes[-1]["pos"]),
-                LerpHprInterval(self.actor, duration, self.keyframes[-1]["hpr"]),
-                LerpScaleInterval(self.actor, duration, self.keyframes[-1]["scale"])
-            ))
-        
-        self.sequence = Sequence(*intervals)
-        self.sequence.start()
-        self.playing = True
-        self.timer.start(100)
-
-    def update_playback(self):
-        """Stops the timer when the sequence finishes."""
-        if self.sequence and not self.sequence.isPlaying():
-            self.timer.stop()
-            self.playing = False
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    # When instantiating, pass a Panda3D world object. For testing, create a dummy world.
     from QPanda3D.Panda3DWorld import Panda3DWorld
     dummy_world = Panda3DWorld(1024, 768)
     editor_tab = SequenceEditorTab(dummy_world)
