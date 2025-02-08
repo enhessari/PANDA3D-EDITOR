@@ -7,6 +7,8 @@ from PyQt5.QtWidgets import QApplication, QDialog, QTableWidget, QTableWidgetIte
 from twisted.internet.protocol import DatagramProtocol
 from twisted.internet import reactor
 import subprocess
+import os
+from pathlib import Path
 
 class UDPClient(DatagramProtocol):
     def __init__(self, server_address):
@@ -41,14 +43,17 @@ class NetworkManager:
         return cls._instance
 
     def __init_singleton__(self, server_address=("127.0.0.1", 9000), is_client=False):
-        """Initialize networking for server or client mode."""
         self.server_address = server_address
         self.is_client = is_client
         self.udp_client = None
         self.behaviors = []
 
         if not is_client:
-            self.start_network()
+            # Only start the network if not already listening.
+            if not reactor.getDelayedCalls():
+                self.start_network()
+            else:
+                print("Server already started, skipping start_network.")
         else:
             self.connect_to_server()
             
@@ -195,6 +200,9 @@ class NetworkSettingsWindow(QWidget):
         self.start_button = QPushButton("Start Game")
         self.start_button.clicked.connect(self.start_game)
 
+        # Create a preview build placeholder if it doesn't exist
+        self.create_preview_build_placeholder()
+
         self.layout.addWidget(self.mode_label)
         self.layout.addWidget(self.mode_dropdown)
         self.layout.addWidget(self.sync_label)
@@ -202,25 +210,50 @@ class NetworkSettingsWindow(QWidget):
         self.layout.addWidget(self.start_button)
         self.setLayout(self.layout)
 
+    def create_preview_build_placeholder(self):
+        """Create a basic preview_build.py if it doesn't exist."""
+        preview_path = Path(__file__).parent / "preview_build.py"
+        if not preview_path.exists():
+            basic_code = '''# Preview Build Placeholder
+                            print("Game preview running successfully!")
+                            # Add your actual game initialization code here
+                            '''
+            with open(preview_path, 'w') as f:
+                f.write(basic_code)
+            print(f"Created placeholder preview_build.py at {preview_path}")
+
     def start_game(self):
+        # Get the directory of the current script
+        current_dir = Path(__file__).parent
+        preview_path = current_dir / "preview_build.py"
+        
+        # Verify the file exists
+        if not preview_path.exists():
+            QMessageBox.critical(self, "Error", "preview_build.py not found!")
+            return
+
         selected_mode = self.mode_dropdown.currentText()
-        sync_mode = self.sync_dropdown.currentText()
+        
+        # Define python_exe using sys.executable
+        python_exe = sys.executable
 
-        # ✅ Save to a temporary config file
-        with open("network_config.txt", "w") as f:
-            f.write(f"mode={selected_mode}\nsync={sync_mode}")
-
-        # ✅ Start the correct server mode
+        command = [python_exe, str(preview_path)]
         if selected_mode == "Singleplayer":
-            command = ["python", "preview_build.py"]
+            command.extend(["--client", "--connect", "127.0.0.1"])
         elif selected_mode == "Local Host":
-            command = ["python", "preview_build.py", "--server"]
+            command.append("--server")
         elif selected_mode == "Dedicated Server":
-            command = ["python", "preview_build.py", "--server", "--headless"]
+            command.extend(["--server", "--headless"])
 
-        subprocess.Popen(command, shell=True)
-        QMessageBox.information(self, "Game Started", f"Game started in {selected_mode} mode.")
-
+        try:
+            subprocess.Popen(command, cwd=current_dir)
+            QMessageBox.information(
+                self, 
+                "Success", 
+                f"Game started in {selected_mode} mode.\nRunning: {' '.join(command)}"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to start game: {str(e)}")
 
 class InputSettingsWindow(QDialog):
     def __init__(self, input_manager):

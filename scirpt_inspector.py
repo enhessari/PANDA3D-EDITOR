@@ -461,78 +461,8 @@ class ScriptInspector(QWidget):
         script_box.setLayout(script_layout)
 
         self.scroll_layout.addWidget(script_box)  # Add to the scrollable layout
-        
     
-    def maybe_add_terrain_properties_box(self, node: NodePath, object):
-        """
-        Check if the node is a ShaderTerrainMesh and if so add the terrain properties box.
-        """
-        # The actual Panda3D node is stored inside the NodePath.
-        if isinstance(node.node(), ShaderTerrainMesh):
-            terrain_instance = node.node()  # This is the ShaderTerrainMesh instance.
-            print(f"Adding terrain properties for {node.get_name()}")
-            self.create_terrain_properties_box(node, terrain_instance, self.world, object)
-        else:
-            print("The selected node is not a ShaderTerrainMesh.")
-
-    def create_terrain_properties_box(self, node: NodePath, terrain_instance, w, object):
-        """
-        Create and add a QGroupBox to the inspector for editing terrain properties.
-        In this example, we add a field for the ShaderTerrainMesh block size.
-        Adjust or extend with other properties as needed.
-        """
-        terrain_box = QGroupBox("Terrain Properties")
-        terrain_layout = QVBoxLayout(terrain_box)
-        terrain_box.setStyleSheet(
-            "QGroupBox { background-color: #eee; border: 1px solid #666; margin-top: 10px; }"
-            "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; }"
-        )
-
-        # Helper function to add a labeled QLineEdit.
-        def add_property_field(label_text, initial_value, update_func):
-            label = QLabel(label_text)
-            label.setMaximumHeight(30)
-            input_field = QLineEdit(str(initial_value))
-            input_field.setMaximumHeight(30)
-            input_field.textChanged.connect(lambda text: update_func(text))
-            terrain_layout.addWidget(label)
-            terrain_layout.addWidget(input_field)
-            return input_field
-
-        # Example Property: Block Size (ShaderTerrainMesh provides getBlockSize() and setBlockSize())
-        current_block_size = (
-            terrain_instance.getBlockSize() if hasattr(terrain_instance, "getBlockSize") else "N/A"
-        )
-        add_property_field(
-            "Block Size:",
-            current_block_size,
-            lambda text: self.update_shader_terrain_property("block_size", text, node, object)
-        )
-
-        # You can add additional fields here. For example:
-        # add_property_field("Some Other Property:", initial_value, update_function)
-
-        # Add the terrain box to the inspector’s scrollable layout.
-        self.scroll_layout.addWidget(terrain_box)
-        return terrain_box
-
-    def update_shader_terrain_property(self, attr, value, node, object):
-        """
-        Update a property on the ShaderTerrainMesh. In this example, only 'block_size' is handled.
-        Extend this method to update additional properties as needed.
-        """
-        terrain_instance = node.node()
-        try:
-            if attr == "block_size":
-                new_value = int(value)
-                if hasattr(terrain_instance, "setBlockSize"):
-                    terrain_instance.setBlockSize(new_value)
-                    print(f"Updated block size to {new_value} on {node.get_name()}")
-                else:
-                    print("Terrain instance does not support setBlockSize().")
-            # Add additional property cases here...
-        except Exception as e:
-            print(f"Error updating terrain property '{attr}': {e}")
+    
     
         
         

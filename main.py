@@ -28,9 +28,11 @@ import scirpt_inspector
 from direct.gui.DirectGui import DirectButton, DirectLabel, DirectFrame
 from direct.gui import DirectGuiGlobals as DGG
 import input_manager
+from input_manager import NetworkManager, InputManager
 import uuid
 import sequence_editor as sequenceEditorTab
 import raycasting
+import Preview_build
 
 class PandaTest(Panda3DWorld):
     def __init__(self, width=1024, height=768, script_inspector=None):
@@ -686,8 +688,6 @@ def close(): #TODO when saving is introduced make a window pop up with save opti
     """closing the editor"""
     exit()
 
-network_manager = input_manager.NetworkManager()
-input_manager_c = input_manager.InputManager(network_manager)
 input_settings = None
 net_settings = None
 def show_input_manager():
@@ -700,10 +700,47 @@ def show_net_manager():
     net_settings = input_manager.NetworkSettingsWindow()
     net_settings.show()
     
-def play_mode():
-    import Preview_build
-    app = Preview_build.GamePreviewApp()
+from multiprocessing import Process
+
+# Top-level function for multiprocessing
+def run_game_preview(network_manager):
+    app = Preview_build.GamePreviewApp(network_manager)
     app.run()
+
+def play_mode():
+    """Launch game preview in a separate process as a client"""
+    server_ip = "127.0.0.1"
+    server_port = 9000
+
+    # Ensure the game process uses the client NetworkManager
+    from multiprocessing import get_context
+    ctx = get_context('spawn')
+    game_process = ctx.Process(
+        target=run_game_preview,
+        args=(server_ip, server_port)
+    )
+    game_process.start()
+
+def run_game_preview(server_ip, server_port):
+    """Target function for the game preview process (client)"""
+    network_manager = NetworkManager(
+        server_address=(server_ip, server_port),
+        is_client=True  # Force client mode
+    )
+    network_manager.connect_to_server()
+    app = Preview_build.GamePreviewApp(network_manager)
+    app.run()
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.game_process = None  # Track game process
+        
+    def closeEvent(self, event):
+        """Clean up when main window closes"""
+        if self.game_process and self.game_process.is_alive():
+            self.game_process.terminate()
+        event.accept()
 
 #-------------------
 #Terrain Generation
@@ -770,6 +807,11 @@ def build_project():
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     appw = QMainWindow()
+    
+    # Initialize NetworkManager and InputManager inside the main block
+    network_manager = NetworkManager()  # Server mode
+    input_manager_c = InputManager(network_manager)
+    
     world = PandaTest()
     appw.setGeometry(50, 50, 1024, 768)
     

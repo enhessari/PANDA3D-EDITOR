@@ -11,25 +11,33 @@ from twisted.internet.protocol import DatagramProtocol
 from twisted.internet import reactor
 
 class GamePreviewApp(ShowBase):
-    def __init__(self, network_manager):
+    def __init__(self, network_manager=None):
         super().__init__()
-        self.network_manager = network_manager  # ✅ Store the network manager
         self.disableMouse()
-        self.entities = []
+        if network_manager is None:
+            from input_manager import NetworkManager
+            network_manager = NetworkManager()  # or however you want to create a default instance
+        
+        # Initialize systems
+        self.network_manager = network_manager
+        self.network_manager.connect_to_server()  # Connect to existing server
+        
+        # Initialize the input manager here
+        from input_manager import InputManager
+        self.input_manager = InputManager(network_manager)  # Pass network_manager if needed
 
-        # Load all entities from the 'saves' folder
+        # Load game content
+        self.load_game_assets()
+        
+    def load_game_assets(self):
+        """Load game content without editor references"""
         data_folder = "saves"
-        self.input_manager = InputManager(network_manager=self.network_manager)
-        self.entities = load_all_entities_from_folder(data_folder, self.render, self.network_manager, self.input_manager)
-
-
-        # Set up networking based on the input configuration
-        self.network_manager = self.setup_networking()
-        
-
-        self.setup_camera()
-        self.taskMgr.add(self.update, "inputUpdateTask")
-        
+        self.entities = load_all_entities_from_folder(
+            data_folder, 
+            self.render,      # Use THIS ShowBase's render
+            self.network_manager,
+            self.input_manager
+        )
         
 
     def setup_camera(self):
@@ -46,6 +54,7 @@ class GamePreviewApp(ShowBase):
             networking_enabled = False  # Default to local-only
 
         return NetworkManager() if networking_enabled else None
+    
 
     def update(self, task):
         """Live updates input settings dynamically during preview mode."""
@@ -72,21 +81,18 @@ if __name__ == "__main__":
         # Run server without rendering the game
         while True:
             reactor.run(installSignalHandlers=False)
-    if "--client" in sys.argv:
-        server_ip = "127.0.0.1"  # Default to localhost
+    elif "--client" in sys.argv:
+        server_ip = "127.0.0.1"
         if "--connect" in sys.argv:
             idx = sys.argv.index("--connect") + 1
             if idx < len(sys.argv):
                 server_ip = sys.argv[idx]
-
-        print(f"Connecting to server at {server_ip}...")
-        
         from input_manager import NetworkManager
-
         network_manager = NetworkManager(server_address=(server_ip, 9000), is_client=True)
         app = GamePreviewApp(network_manager=network_manager)
         app.run()
     else:
-    
-        app = GamePreviewApp()
+        from input_manager import NetworkManager
+        network_manager = NetworkManager()  # Create a default NetworkManager instance
+        app = GamePreviewApp(network_manager=network_manager)
         app.run()
