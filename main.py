@@ -20,11 +20,11 @@ import terrainEditor
 import importlib
 import os
 import entity_editor
-import node_system
+#import node_system
 from PyQt5.QtCore import pyqtSignal
 from scirpt_inspector import ScriptInspector
 import scirpt_inspector
-import qdarktheme
+#import qdarktheme
 from direct.gui.DirectGui import DirectButton, DirectLabel, DirectFrame
 from direct.gui import DirectGuiGlobals as DGG
 import input_manager
@@ -133,7 +133,7 @@ class PandaTest(Panda3DWorld):
         self.raycasting = raycasting.Picker(self)
     
     def assign_id(self, nodepath: NodePath):
-        nodepath.set_python_tag("scripts", [])
+        nodepath.set_python_tag("scripts", {})
         nodepath.set_python_tag("script_paths", [])
         nodepath.set_python_tag("script_properties", [])
         nodepath.set_python_tag("id", str(uuid.uuid4())[:8])
@@ -399,14 +399,27 @@ class StartupWindow(QWidget):
         layout.addWidget(self.project_list)
         self.select_button = QPushButton("Open Project")
         self.select_button.clicked.connect(self.load_projects)
+        self.select_button.setEnabled(False)  # Initially disabled
         layout.addWidget(self.select_button)
         self.new_project_input = QLineEdit()
         self.new_project_input.setPlaceholderText("Enter new project name...")
         layout.addWidget(self.new_project_input)
         self.create_button = QPushButton("Create New Project")
         self.create_button.clicked.connect(self.create_project)
+        self.project_list.itemSelectionChanged.connect(self.update_button_state)
+        self.project_list.itemDoubleClicked.connect(self.on_item_double_clicked)
         layout.addWidget(self.create_button)
         self.setLayout(layout)
+
+    def on_item_double_clicked(self, item):
+        """Handle double-click on project list item"""
+        project_path = item.data(Qt.UserRole)
+        self.load_projects(select=project_path)
+
+    def update_button_state(self):
+        """Enables/disables Open Project button based on selection"""
+        has_selection = bool(self.project_list.selectedItems())
+        self.select_button.setEnabled(has_selection)
 
     def fill_project_list(self, folder_path):
         self.project_list.clear()
@@ -418,6 +431,8 @@ class StartupWindow(QWidget):
         except Exception as e:
             print(f"Error reading directory {folder_path}: {e}")
             return
+        if entries:
+            self.project_list.setCurrentRow(0)
         for entry in entries:
             full_path = os.path.join(folder_path, entry)
             if os.path.isdir(full_path):
@@ -742,11 +757,12 @@ def save_map(map_name):
     saver.save_scene_to_toml(world.render, toml_file_path)
     saver.save_scene_to_map(toml_file_path, map_file_path)
 
-def delete_selection():
-    global world
-    world.selected_node.removeNode()
-    world.refresh()
-    world.selected_node = None  # Clear the selection
+#def delete_selection():
+#    global world
+#    if world.selected_node:  # Check if a node is actually selected
+#        world.selected_node.removeNode()
+#        world.refresh()
+#        world.selected_node = None  # Clear the selection
 
 def build_project():
     os.system("python build.py")
@@ -768,8 +784,8 @@ if __name__ == "__main__":
 
     appw.addToolBar(toolbar)
     
-    delete_srct = QShortcut(main_widget, key="Delete")
-    delete_srct.activated.connect(delete_selection)
+    #delete_srct = QShortcut(main_widget, key="Delete")
+    #delete_srct.activated.connect(delete_selection)
     
 
     # Create the menu
@@ -1001,9 +1017,72 @@ if __name__ == "__main__":
         box.textChanged.connect(lambda box=box, coord=coord: prop_ui_e.update_node_property(box, coord))
 
     # Set the background color of the widget to gray
-    qdarktheme.setup_theme()
+    #qdarktheme.setup_theme()
     #apply_stylesheet(appw, theme="light_blue.xml")
+
+    # Replace qdarktheme with this
+    app.setStyle("Fusion")
     
+    # Create dark palette
+    dark_palette = QPalette()
+    dark_palette.setColor(QPalette.Window, QColor(53, 53, 53))
+    dark_palette.setColor(QPalette.WindowText, Qt.white)
+    dark_palette.setColor(QPalette.Base, QColor(25, 25, 25))
+    dark_palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
+    dark_palette.setColor(QPalette.ToolTipBase, Qt.white)
+    dark_palette.setColor(QPalette.ToolTipText, Qt.white)
+    dark_palette.setColor(QPalette.Text, Qt.white)
+    dark_palette.setColor(QPalette.Button, QColor(53, 53, 53))
+    dark_palette.setColor(QPalette.ButtonText, Qt.white)
+    dark_palette.setColor(QPalette.BrightText, Qt.red)
+    dark_palette.setColor(QPalette.Link, QColor(42, 130, 218))
+    dark_palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
+    dark_palette.setColor(QPalette.HighlightedText, Qt.black)
+
+    dark_palette.setColor(QPalette.Disabled, QPalette.Button, QColor(42, 42, 42))
+    dark_palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(128, 128, 128))
+    dark_palette.setColor(QPalette.Disabled, QPalette.Text, QColor(128, 128, 128))
+
+    app.setPalette(dark_palette)
+    app.setStyleSheet("QToolTip { color: #ffffff; background-color: #2a82da; border: 1px solid white; }")
+    app.setStyleSheet("""
+        /* Style for tool buttons with menus */
+        QToolButton {
+            padding-right: 15px;
+            background-color: #353535;
+            border: 1px solid #454545;
+            border-radius: 3px;
+            min-width: 60px;
+        }
+        
+        QToolButton::menu-indicator {
+            subcontrol-origin: padding;
+            subcontrol-position: right center;
+            width: 12px;
+            right: 2px;
+        }
+
+        /* Style for dropdown menus */
+        QMenu {
+            background-color: #404040;
+            border: 1px solid #505050;
+            color: white;
+        }
+        
+        QMenu::item {
+            padding: 5px 25px 5px 20px;
+        }
+        
+        QMenu::item:selected {
+            background-color: #505050;
+        }
+        
+        QMenu::separator {
+            height: 1px;
+            background: #505050;
+            margin: 4px 8px;
+        }
+    """)
 
     # Show the application window
     startup_w()

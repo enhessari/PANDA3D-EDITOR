@@ -2,9 +2,12 @@
 import sys
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QHBoxLayout, QVBoxLayout, QSlider,
-    QPushButton, QListWidget, QLabel, QComboBox, QLineEdit, QFileDialog
+    QPushButton, QListWidget, QLabel, QComboBox, QLineEdit, QFileDialog 
 )
 from PyQt5.QtCore import Qt, QTimer
+
+import qtimeline
+
 
 # Import your QPanda3D widget – it must accept a world reference.
 from QPanda3D.QPanda3DWidget import QPanda3DWidget
@@ -13,7 +16,7 @@ from direct.actor.Actor import Actor
 from direct.interval.IntervalGlobal import Sequence, Parallel, LerpPosInterval, LerpHprInterval, LerpScaleInterval
 from panda3d.core import (
     Vec3, Point3, CollisionTraverser, CollisionNode, CollisionRay,
-    CollisionHandlerQueue, BitMask32, CollisionTube, CollisionSphere
+    CollisionHandlerQueue, BitMask32, CollisionTube, CollisionSphere, GeomNode
 )
 
 def lerp_tuple(start, end, t):
@@ -25,20 +28,32 @@ class SequenceEditorTab(QWidget):
         """
         :param panda3DWorld: The Panda3D world instance (e.g., your PandaTest object)
         """
+        
+        
+        
+        
+        
         # Gizmo state variables.
         self.gizmo_active = False
         self.current_drag_axis = None
         self.last_mouse_pos = None
         
         self.gizmotask = True
-
+        
+        
 
         super(SequenceEditorTab, self).__init__(parent)
         self.panda3DWorld = panda3DWorld
 
 
+        main_vlayout = QVBoxLayout(self)
+        
         # --- Set up the main layout ---
         main_layout = QHBoxLayout(self)
+        
+        
+        
+        
         
         # --- 3D Viewport ---
         self.panda_widget = QPanda3DWidget(panda3DWorld)
@@ -47,7 +62,7 @@ class SequenceEditorTab(QWidget):
         # --- Controls Panel ---
         controls_panel = QWidget()
         controls_layout = QVBoxLayout(controls_panel)
-        main_layout.addWidget(controls_panel, 1)
+        main_layout.addWidget(controls_panel)
         
         # Timeline slider and label.
         self.timeline_label = QLabel("Time: 0.00")
@@ -136,6 +151,33 @@ class SequenceEditorTab(QWidget):
         controls_layout.addWidget(self.gizmo_toggle_btn)
         
         controls_layout.addStretch()
+        # ✅ Add the main content area (3D viewport + controls)
+        
+        
+        content_container = QWidget()
+        content_layout = QHBoxLayout(content_container)
+        main_vlayout.addWidget(content_container)  # Make it take up most of the space
+
+        # ✅ Create a container for the timeline (so it sits at the bottom)
+        timeline_container = QWidget()
+        timeline_layout = QHBoxLayout(timeline_container)
+
+        # ✅ Create the custom QTimeLine widget
+        self.timeline = qtimeline.QTimeLine(15, 1000)  # 15 seconds, 1000 frames
+        
+        self.timeline.keyFrameChanged.connect(lambda kf_id, new_time: self.keyframe_change(kf_id, new_time))
+        self.timeline.keyFrameRemoved.connect(lambda kf_id: self.keyframe_remove(kf_id))
+        self.timeline.timelineSliderMoved.connect(lambda time: self.on_slider_change(time))
+
+        
+        
+        # ✅ Add the timeline widget
+        timeline_layout.addWidget(self.timeline)
+
+        # ✅ Add the timeline container at the bottom
+        main_vlayout.addLayout(main_layout)
+        main_vlayout.addLayout(timeline_layout)
+        main_vlayout.addWidget(timeline_container, 3)  # Make it sit at the bottom
         
         # --- Scene Setup ---
         self.setup_scene()
@@ -156,6 +198,26 @@ class SequenceEditorTab(QWidget):
         # Accept mouse1 events from the Panda3D world.
         #self.panda3DWorld.accept("mouse1", self._on_gizmo_click)
 
+    def keyframe_change(self, kf_id, new_time):
+        # Loop through the parent's keyframes list and update the keyframe with the matching id.
+        for kf in self.keyframes:
+            if kf.get("id") == kf_id:
+                kf["time"] = new_time
+                print(f"Updated keyframe id {kf_id} to new time {new_time:.2f}")
+                break
+        # Refresh the keyframe list widget to reflect the changes.
+        self.update_keyframe_list()
+    
+    def keyframe_remove(self, kf_id):
+        # Loop through the parent's keyframes list and update the keyframe with the matching id.
+        for kf in self.keyframes:
+            if kf.get("id") == kf_id:
+                print(f"deleted keyframe id {kf_id}")
+                self.keyframes.remove(kf)
+                break
+        # Refresh the keyframe list widget to reflect the changes.
+        self.update_keyframe_list()
+        
     def setup_scene(self):
         """Loads a default actor and sets up joints."""
         self.actor = Actor("models/panda-model")
@@ -248,21 +310,27 @@ class SequenceEditorTab(QWidget):
         self.preview_at_time(current_time)
 
     def add_keyframe(self):
-        """Captures a keyframe (global and joint transforms)."""
         t = self.timeline_slider.value() / 100.0
+        # Ensure default values are used if needed.
+        pos = tuple(self.actor.getPos()) if self.actor.getPos() is not None else (0, 0, 0)
+        hpr = tuple(self.actor.getHpr()) if self.actor.getHpr() is not None else (0, 0, 0)
+        scale = tuple(self.actor.getScale()) if self.actor.getScale() is not None else (1, 1, 1)
+
         keyframe = {
             "time": t,
-            "pos": tuple(self.actor.getPos()),
-            "hpr": tuple(self.actor.getHpr()),
-            "scale": tuple(self.actor.getScale()),
+            "pos": pos,
+            "hpr": hpr,
+            "scale": scale,
             "joints": {}
         }
         for name, joint_np in self.controlled_joints.items():
             keyframe["joints"][name] = {
-                "pos": tuple(joint_np.getPos()),
-                "hpr": tuple(joint_np.getHpr()),
-                "scale": tuple(joint_np.getScale())
+                "pos": tuple(joint_np.getPos()) if joint_np.getPos() is not None else (0, 0, 0),
+                "hpr": tuple(joint_np.getHpr()) if joint_np.getHpr() is not None else (0, 0, 0),
+                "scale": tuple(joint_np.getScale()) if joint_np.getScale() is not None else (1, 1, 1)
             }
+        t = self.timeline.triggerAddKeyFrame(keyframe)
+        keyframe["time"] = t
         self.keyframes.append(keyframe)
         self.keyframes.sort(key=lambda k: k["time"])
         self.update_keyframe_list()
@@ -430,7 +498,8 @@ class SequenceEditorTab(QWidget):
             if arrow.find("**/+CollisionNode").isEmpty():
                 print("is empty")
                 cn = CollisionNode(f"gizmo_{axis}_col")
-                cn.addSolid(CollisionSphere(0.5, 0.5, 0, radius))
+                cn.addSolid(CollisionSphere(0.5, 0, 0, radius))
+                
 
                 cn.setFromCollideMask(BitMask32.bit(10))
                 cn.setIntoCollideMask(BitMask32.bit(10))

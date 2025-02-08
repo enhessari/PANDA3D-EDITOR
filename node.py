@@ -90,6 +90,14 @@ class NodeItem(QGraphicsRectItem):
 
     def boundingRect(self):
         return QRectF(0, 0, self.rect().width(), self.rect().height())
+    
+    def remove_edges(self):
+        if self.input_edge:
+            self.scene().removeItem(self.input_edge)
+            self.input_edge = None
+        if self.output_edge:
+            self.scene().removeItem(self.output_edge)
+            self.output_edge = None
 
     def itemChange(self, change, value):
         """
@@ -111,13 +119,19 @@ class EdgeItem(QGraphicsItem):
         self.start_socket = start_socket
         self.end_socket = end_socket  # can be None if we're currently dragging
 
+        # Enable selecting the edge
+        self.setFlag(QGraphicsItem.ItemIsSelectable)
+
         # Make sure the line appears on top of nodes
         # (setZValue HIGHER than node’s default 0)
         self.setZValue(999)
 
-        # Pen for drawing the line (bright green, thicker width)
-        self.pen = QPen(QColor("#00FF00"))
-        self.pen.setWidth(3)
+        # Pens for different states
+        self.normal_pen = QPen(QColor("#00FF00"))  # Bright green
+        self.normal_pen.setWidth(3)
+        self.selected_pen = QPen(QColor("#FFA500"))  # Orange
+        self.selected_pen.setWidth(5)
+        self.max_pen_width = max(self.normal_pen.width(), self.selected_pen.width())
 
         # If we already know the end_socket, set references
         if self.start_socket and self.end_socket:
@@ -131,14 +145,16 @@ class EdgeItem(QGraphicsItem):
         self.updatePositions()
 
     def boundingRect(self):
-        # Expand bounding rect slightly so we don’t clip the thick line
         rect = QRectF(self.start_point, self.end_point).normalized()
-        pen_width = self.pen.width()
+        pen_width = self.max_pen_width
         rect = rect.adjusted(-pen_width, -pen_width, pen_width, pen_width)
         return rect
 
     def paint(self, painter, option, widget):
-        painter.setPen(self.pen)
+        if self.isSelected():
+            painter.setPen(self.selected_pen)
+        else:
+            painter.setPen(self.normal_pen)
         painter.drawLine(self.start_point, self.end_point)
 
     def updatePositions(self):
@@ -247,6 +263,7 @@ class NodeScene(QGraphicsScene):
 class NodeView(QGraphicsView):
     def __init__(self, scene, parent=None):
         super().__init__(scene, parent)
+        self.setFocusPolicy(Qt.StrongFocus)  # Add this line
         self.setRenderHint(QPainter.Antialiasing)
         self.setViewportUpdateMode(QGraphicsView.BoundingRectViewportUpdate)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
@@ -263,6 +280,15 @@ class NodeView(QGraphicsView):
             zoomFactor = zoomOutFactor
 
         self.scale(zoomFactor, zoomFactor)
+
+    def keyPressEvent(self, event):
+        """Handle key press events, specifically the Delete key."""
+        if event.key() == Qt.Key_Delete:
+            # Directly call delete method on MainWindow
+            if isinstance(self.parent(), MainWindow):
+                self.parent().delete_selected_nodes()
+        else:
+            super().keyPressEvent(event)
 
 # -----------------------------------------------------------------------------
 #   MainWindow: The top-level window with a toolbox and the node editor
@@ -284,27 +310,34 @@ class MainWindow(QMainWindow):
 
         # Buttons for adding nodes
         self.add_for_btn = QPushButton("Add For Node")
-        self.add_for_btn.clicked.connect(self.add_for_node)
+        self.add_for_btn.clicked.connect(self.add_for_node)  # Fixed method name
         self.toolbox_layout.addWidget(self.add_for_btn)
 
         self.add_if_btn = QPushButton("Add If Node")
-        self.add_if_btn.clicked.connect(self.add_if_node)
+        self.add_if_btn.clicked.connect(self.add_if_node)  # Fixed method name
         self.toolbox_layout.addWidget(self.add_if_btn)
 
         self.add_else_btn = QPushButton("Add Else Node")
-        self.add_else_btn.clicked.connect(self.add_else_node)
+        self.add_else_btn.clicked.connect(self.add_else_node)  # Fixed method name
         self.toolbox_layout.addWidget(self.add_else_btn)
 
         self.add_while_btn = QPushButton("Add While Node")
-        self.add_while_btn.clicked.connect(self.add_while_node)
+        self.add_while_btn.clicked.connect(self.add_while_node)  # Fixed method name
         self.toolbox_layout.addWidget(self.add_while_btn)
+
+        self.delete_btn = QPushButton("Delete")
+        self.delete_btn.clicked.connect(self.delete_selected_nodes)
+        self.toolbox_layout.addWidget(self.delete_btn)
+        self.delete_btn.setEnabled(False)
+
+        self.scene.selectionChanged.connect(self.update_delete_button_state)
 
         # Button for generating code
         self.generate_code_btn = QPushButton("Generate Code")
         self.generate_code_btn.clicked.connect(self.generate_code)
         self.toolbox_layout.addWidget(self.generate_code_btn)
 
-        # Make the toolbox a dock on the right
+        # Dock setup
         dock = QDockWidget("Toolbox", self)
         dock.setWidget(self.toolbox)
         dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
@@ -313,12 +346,49 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
 
     # -------------------------------------------------------------------------
-    #   Slots for adding nodes
+    #   Delete functionality
+    # -------------------------------------------------------------------------
+    def update_delete_button_state(self):
+        """Enable delete button if nodes or edges are selected."""
+        selected_items = self.scene.selectedItems()
+        has_deletable = any(isinstance(item, (NodeItem, EdgeItem)) for item in selected_items)
+        self.delete_btn.setEnabled(has_deletable)
+
+    def delete_selected_nodes(self):
+        """Handle deletion of nodes and edges, updating connected nodes."""
+        selected_items = self.scene.selectedItems()
+        for item in selected_items:
+            if isinstance(item, NodeItem):
+                # Remove input edge (edge coming into this node)
+                if item.input_edge:
+                    edge = item.input_edge
+                    # Update the source node's output_edge
+                    source_node = edge.start_socket.parent_node
+                    source_node.output_edge = None
+                    self.scene.removeItem(edge)
+                # Remove output edge (edge going out from this node)
+                if item.output_edge:
+                    edge = item.output_edge
+                    # Update the target node's input_edge
+                    target_node = edge.end_socket.parent_node
+                    target_node.input_edge = None
+                    self.scene.removeItem(edge)
+                # Remove the node itself
+                self.scene.removeItem(item)
+            elif isinstance(item, EdgeItem):
+                # Update both connected nodes
+                if item.start_socket:
+                    item.start_socket.parent_node.output_edge = None
+                if item.end_socket:
+                    item.end_socket.parent_node.input_edge = None
+                self.scene.removeItem(item)
+
+    # -------------------------------------------------------------------------
+    #   Node creation methods (PROPERLY INDENTED INSIDE CLASS)
     # -------------------------------------------------------------------------
     def add_for_node(self):
         node = NodeItem(title="For Loop", node_type="for")
         self.scene.addItem(node)
-        # Place it in the center of current view
         center = self.view.mapToScene(self.view.viewport().rect().center())
         node.setPos(center)
 

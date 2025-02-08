@@ -12,7 +12,6 @@ class script_inspector_example(MonoBehavior):
         self._current_pos = self.node.getPos()
         self.velocity = 0
         
-        # ✅ Register the behavior with InputManager
         if self.input_manager:
             self.input_manager.register_behavior(self)
 

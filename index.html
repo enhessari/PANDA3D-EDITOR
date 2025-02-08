@@ -1,0 +1,22 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>My PyWebView App</title>
+</head>
+<body>
+    <h1>Welcome to the PyWebView App</h1>
+    <button onclick="callPython()">Say Hello</button>
+    
+    <script>
+        function callPython() {
+            // Assuming that 'api' is available on the window object (PyWebView injects it)
+            window.pywebview.api.say_hello('World').then(response => {
+                console.log(response);
+                alert(response);
+            });
+        }
+    </script>
+</body>
+</html>

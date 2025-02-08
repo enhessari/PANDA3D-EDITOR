@@ -22,24 +22,24 @@ class Drag_and_drop_ui_editor:
         self.draggable = False
         self.is_moving = False
         
-        #self.collision_traverser = CollisionTraverser()
-        #self.collision_handler = CollisionHandlerQueue()
-        #
-        #self.mouse_ray = CollisionRay()
-        #self.mouse_node = CollisionNode('mouse_ray')
-        #self.mouse_node.add_solid(self.mouse_ray)
-        #self.mouse_node.set_from_collide_mask(BitMask32.bit(1))
-        #self.mouse_node.set_into_collide_mask(BitMask32.bit(1))
-        #self.mouse_node_path = self.world.camera.attach_new_node(self.mouse_node)
-#
-        #self.collision_traverser.add_collider(self.mouse_node_path, self.collision_handler)
+        self.collision_traverser = CollisionTraverser()
+        self.collision_handler = CollisionHandlerQueue()
         
-        #self.world.accept("mouse1", self.start_holding)
-        #self.world.accept('mouse1-up', self.stop_drag)
-        #self.world.accept("mouse-move", self.mouse_move)
-        
+        self.mouse_ray = CollisionRay()
+        self.mouse_node = CollisionNode('mouse_ray')
+        self.mouse_node.add_solid(self.mouse_ray)
+        self.mouse_node.set_from_collide_mask(BitMask32.bit(1))
+        self.mouse_node.set_into_collide_mask(BitMask32.bit(1))
+        self.mouse_node_path = self.world.camera.attach_new_node(self.mouse_node)
+
+        self.collision_traverser.add_collider(self.mouse_node_path, self.collision_handler)
+    
+        self.world.accept("mouse1", self.start_holding)
+        self.world.accept('mouse1-up', self.stop_drag)
+        self.world.accept("mouse-move", self.mouse_move)
+    
         # Create UI elements
-        #self.label("hello world!", 0.1, parent=world.canvas)
+        self.label("hello world!", 0.1, parent1=world.canvas)
         print("hello world")
         
         self.grid = False
