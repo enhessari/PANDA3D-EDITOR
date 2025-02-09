@@ -13,6 +13,12 @@ class GizmoDemo(DirectObject):
     def __init__(self, world: Panda3DWorld):
         super().__init__()
         
+        self.world = world
+        
+        
+        self.move_speed = 1
+        
+        
         # Disable default camera controls.
         world.disableMouse()
         world.camera.setPos(10, -20, 10)
@@ -120,8 +126,52 @@ class GizmoDemo(DirectObject):
         # Add the camera update task.
         world.taskMgr.add(self.update_camera, "update_camera")
         
-        # Center the mouse.
-        world.win.movePointer(0, int(self.win.getXSize() / 2), int(self.win.getYSize() / 2))
+        if hasattr(world.win, "movePointer"):
+            world.win.movePointer(0, int(world.win.getXSize() / 2), int(world.win.getYSize() / 2))
+        else:
+            print("Warning: movePointer not available on world.win")
+            
+        # Enable controls
+        self.keys = ("w", "s", "q", "e", "a", "d", "mouse2", "arrow_left", "arrow_up", "arrow_down", "arrow_right",
+                     "page_up", "page_down")
+        self.input = {}
+        for i in self.keys:
+            self.input[i] = False
+            self.accept(i, self.update, extraArgs=[i, True])
+            self.accept(i + "-up", self.update, extraArgs=[i, False])
+            
+        # Mouse position
+        self.accept("mouse-move", self.mouse_move)
+        
+        # Enable movement
+        self.move_task = self.add_task(self.move)
+
+    def mouse_up(self, *args):
+        print("uo", args)
+
+    def mouse_move(self, evt: dict):
+        self.x, self.y = evt['x'], evt['y']
+
+    def update(self, key, value, *args):
+        self.input[key] = value
+
+        # Reseat mouse position
+        if args and value:
+            args = args[0]
+            self.x, self.y = args['x'], args['y']
+            self.mx, self.my = self.x, self.y
+
+    def move(self, task):
+        # Mouse Rotation
+        if self.world.mouseWatcherNode.hasMouse():
+            if self.input["mouse2"]:
+                dx, dy = self.mx - self.x, self.my - self.y
+
+                self.world.cam.set_p(self.world.cam, dy * 0.25 * 1)
+                self.world.cam.set_h(self.world.cam, dx * 0.25 * 1)
+
+                self.mx, self.my = self.x, self.y
+        return task.cont
     
     def set_key(self, key, value):
         self.keys[key] = value
@@ -130,44 +180,55 @@ class GizmoDemo(DirectObject):
         dt = globalClock.getDt()
         move_speed = self.camera_speed * dt
         
+        self.cam = self.world.cam
+        
         # Calculate movement direction based on camera orientation.
         move_dir = Vec3(0, 0, 0)
-        if self.keys["w"]:
-            move_dir.y += 1  # Move forward.
-        if self.keys["s"]:
-            move_dir.y -= 1  # Move backward.
-        if self.keys["a"]:
-            move_dir.x -= 1  # Move left.
-        if self.keys["d"]:
-            move_dir.x += 1  # Move right.
-        if self.keys["shift"]:
-            move_dir.z -= 1  # Move down.
-        if self.keys["space"]:
-            move_dir.z += 1  # Move up.
+        # Keyboad Movement
+        if self.input["q"] or self.input["page_up"]:
+            self.cam.set_z(self.cam, 1 * self.move_speed)
+
+        if self.input["e"] or self.input["page_down"]:
+            self.cam.set_z(self.cam, -1 * self.move_speed)
+
+        if self.input["w"] or self.input["arrow_up"]:
+            self.cam.set_y(self.cam, 1 * self.move_speed)
+
+        if self.input["s"] or self.input["arrow_down"]:
+            self.cam.set_y(self.cam, -1 * self.move_speed)
+
+        if self.input["d"] or self.input["arrow_right"]:
+            self.cam.set_x(self.cam, 1 * self.move_speed)
+
+        if self.input["a"] or self.input["arrow_left"]:
+            self.cam.set_x(self.cam, -1 * self.move_speed)
         
         # Normalize the movement vector to prevent faster diagonal movement.
         if move_dir.length() > 0:
             move_dir.normalize()
         
         # Move the camera.
-        self.camera.setPos(self.camera.getPos() + move_dir * move_speed)
+        self.world.camera.setPos(self.world.camera.getPos() + move_dir * move_speed)
         
         # Handle mouse look.
-        if self.mouseWatcherNode.hasMouse():
-            md = self.win.getPointer(0)
-            x = md.getX()
-            y = md.getY()
-            
-            # Calculate mouse movement delta.
-            dx = (x - self.win.getXSize() / 2) * self.mouse_sensitivity
-            dy = (y - self.win.getYSize() / 2) * self.mouse_sensitivity
-            
-            # Rotate the camera.
-            self.camera.setH(self.camera.getH() - dx)
-            self.camera.setP(self.camera.getP() - dy)
-            
-            # Center the mouse.
-            self.win.movePointer(0, int(self.win.getXSize() / 2), int(self.win.getYSize() / 2))
+        if self.world.mouseWatcherNode.hasMouse():
+            if hasattr(self.world.win, "getPointer"):
+                md = self.win.getPointer(0)
+                x = md.getX()
+                y = md.getY()
+
+                # Calculate mouse movement delta.
+                dx = (x - self.win.getXSize() / 2) * self.mouse_sensitivity
+                dy = (y - self.win.getYSize() / 2) * self.mouse_sensitivity
+
+                # Rotate the camera.
+                self.world.camera.setH(self.world.camera.getH() - dx)
+                self.world.camera.setP(self.world.camera.getP() - dy)
+
+                if hasattr(world.win, "movePointer"):
+                    self.world.win.movePointer(0, int(self.world.win.getXSize() / 2), int(self.world.win.getYSize() / 2))
+                else:
+                    print("Warning: movePointer not available on world.win")
         
         return Task.cont
     
@@ -196,10 +257,10 @@ class GizmoDemo(DirectObject):
     def onMouseDown(self):
         """Handle left mouse button press: determine which arrow is clicked
         and initialize the drag state."""
-        if not self.mouseWatcherNode.hasMouse():
+        if not self.world.mouseWatcherNode.hasMouse():
             return
         
-        mpos = self.mouseWatcherNode.getMouse()
+        mpos = self.world.mouseWatcherNode.getMouse()
         self.pickerRay.setFromLens(self.camNode, mpos.getX(), mpos.getY())
         self.picker.traverse(self.gizmo_root)
         
@@ -249,7 +310,7 @@ class GizmoDemo(DirectObject):
     def mouseTask(self, task):
         """If dragging is active, update the gizmo's position constrained along the selected axis."""
         if self.dragAxis is not None and self.initialDragParam is not None and self.mouseWatcherNode.hasMouse():
-            mpos = self.mouseWatcherNode.getMouse()
+            mpos = self.world.mouseWatcherNode.getMouse()
             
             # Recompute the current mouse ray.
             nearPoint = Point3()
