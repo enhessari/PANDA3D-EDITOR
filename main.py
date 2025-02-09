@@ -307,7 +307,7 @@ def on_item_clicked(item, column):
                 
         
         
-        gizmos.GizmoDemo(world, node)
+        test = gizmos.GizmoDemo(world)
 
         
         inspector.recreate_property_box_for_node(node)
