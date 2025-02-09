@@ -121,7 +121,10 @@ class GizmoDemo(DirectObject):
         world.taskMgr.add(self.update_camera, "update_camera")
         
         # Center the mouse.
-        world.win.movePointer(0, int(self.win.getXSize() / 2), int(self.win.getYSize() / 2))
+        if hasattr(world.win, "movePointer"):
+            world.win.movePointer(0, int(world.win.getXSize() / 2), int(world.win.getYSize() / 2))
+        else:
+            print("Warning: movePointer not available on world.win")
     
     def set_key(self, key, value):
         self.keys[key] = value
