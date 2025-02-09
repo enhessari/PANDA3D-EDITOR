@@ -12,7 +12,7 @@ from direct.interval.IntervalGlobal import *
 from direct.gui.OnscreenImage import OnscreenImage
 from direct.showbase.DirectObject import DirectObject
 import ui_editor
-from camera import FlyingCamera
+#from camera import FlyingCamera
 import node
 from shader_editor import ShaderEditor
 from file_explorer import FileExplorer
@@ -33,6 +33,8 @@ import uuid
 import sequence_editor as sequenceEditorTab
 import raycasting
 import Preview_build
+from terrain_control_widget import TerrainControlWidget
+import gizmos
 
 class PandaTest(Panda3DWorld):
     def __init__(self, width=1024, height=768, script_inspector=None):
@@ -45,6 +47,8 @@ class PandaTest(Panda3DWorld):
         self.input_manager = input_manager_c
         
         self.animator_tab = sequenceEditorTab.SequenceEditorTab(self)
+        
+        gizmos.GizmoDemo(self)
         
         
         
@@ -69,7 +73,7 @@ class PandaTest(Panda3DWorld):
         
         self.script_inspector = script_inspector
         self.loader = self.loader
-        self.camera_controls = FlyingCamera(self)
+        #self.camera_controls = FlyingCamera(self)
         self.cam.setPos(0, -58, 30)
         self.cam.setHpr(0, -30, 0)
         self.win.setClearColorActive(True)
@@ -195,7 +199,7 @@ class PandaTest(Panda3DWorld):
         # Detach the old render node (optional)
         old_render.detach_node()
 
-        self.camera_controls = FlyingCamera(self)
+        #self.camera_controls = FlyingCamera(self)
         self.cam.setPos(0, -58, 30)
         self.cam.setHpr(0, -30, 0)
         self.win.setClearColorActive(True)
@@ -300,6 +304,10 @@ def on_item_clicked(item, column):
             widget = inspector.scroll_layout.itemAt(i).widget()
             if widget:
                 widget.setParent(None)
+                
+        
+        
+        gizmos.GizmoDemo(world, node)
 
         
         inspector.recreate_property_box_for_node(node)
@@ -734,13 +742,53 @@ def run_game_preview(server_ip, server_port):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.game_process = None  # Track game process
-        
-    def closeEvent(self, event):
-        """Clean up when main window closes"""
-        if self.game_process and self.game_process.is_alive():
-            self.game_process.terminate()
-        event.accept()
+        self.setWindowTitle("Panda3D Editor")
+
+        # Main widget and layout
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QVBoxLayout(main_widget)
+
+        # Hierarchy tree widget
+        self.hierarchy_tree = QTreeWidget()
+        self.hierarchy_tree.setHeaderLabel("Hierarchy")
+        self.hierarchy_tree.itemClicked.connect(self.on_item_clicked)
+        main_layout.addWidget(self.hierarchy_tree)
+
+        # Terrain control widget
+        self.terrain_control_widget = TerrainControlWidget(terrain_painter_app)
+        main_layout.addWidget(self.terrain_control_widget)
+
+        # Populate the hierarchy tree with example data
+        self.populate_hierarchy_tree()
+
+    def populate_hierarchy_tree(self):
+        # Example data for the hierarchy tree
+        root_item = QTreeWidgetItem(self.hierarchy_tree, ["Root"])
+        child_item = QTreeWidgetItem(root_item, ["Child"])
+        root_item.setExpanded(True)
+
+        # Store NodePath in the item for demonstration purposes
+        root_node = NodePath("Root")
+        child_node = root_node.attachNewNode("Child")
+        root_item.setData(0, Qt.UserRole, root_node)
+        child_item.setData(0, Qt.UserRole, child_node)
+
+    def on_item_clicked(self, item, column):
+        node = item.data(0, Qt.UserRole)  # Retrieve the NodePath stored in the item
+
+        if node:
+            world.selected_node = node
+            # Update input boxes with node's properties
+            input_boxes[(0, 0)].setText(str(node.getX()))
+            input_boxes[(0, 1)].setText(str(node.getY()))
+            input_boxes[(0, 2)].setText(str(node.getZ()))
+            input_boxes[(1, 0)].setText(str(node.getH()))
+            input_boxes[(1, 1)].setText(str(node.getP()))
+            input_boxes[(1, 2)].setText(str(node.getR()))
+            input_boxes[(2, 0)].setText(str(node.getScale().x))
+            input_boxes[(2, 1)].setText(str(node.getScale().y))
+            input_boxes[(2, 2)].setText(str(node.getScale().z()))
 
 #-------------------
 #Terrain Generation
@@ -794,12 +842,34 @@ def save_map(map_name):
     saver.save_scene_to_toml(world.render, toml_file_path)
     saver.save_scene_to_map(toml_file_path, map_file_path)
 
-#def delete_selection():
-#    global world
-#    if world.selected_node:  # Check if a node is actually selected
-#        world.selected_node.removeNode()
-#        world.refresh()
-#        world.selected_node = None  # Clear the selection
+def delete_selection():
+    global world
+    selected_items = world.hierarchy_tree.selectedItems()
+    if not selected_items:
+        print("No item selected.")
+        return
+
+    item = selected_items[0]
+    node = item.data(0, Qt.UserRole)
+    
+    if not node:
+        print("Selected item has no associated node.")
+        return
+
+    # Prevent deletion of the main render node
+    if node == world.render:
+        QMessageBox.warning(appw, "Cannot Delete", "The main render node cannot be deleted.")
+        return
+
+    # Store the node name before removal
+    node_name = node.getName()
+
+    # Proceed with deletion if not the main render
+    node.removeNode()
+    world.refresh()
+    world.selected_node = None
+    print(f"Node '{node_name}' deleted successfully.")
+
 
 def build_project():
     os.system("python build.py")
@@ -814,6 +884,8 @@ if __name__ == "__main__":
     
     world = PandaTest()
     appw.setGeometry(50, 50, 1024, 768)
+
+    world.make_hierarchy()
     
     # Main Widget
     main_widget = QWidget()
@@ -826,8 +898,8 @@ if __name__ == "__main__":
 
     appw.addToolBar(toolbar)
     
-    #delete_srct = QShortcut(main_widget, key="Delete")
-    #delete_srct.activated.connect(delete_selection)
+    delete_shortcut = QShortcut(QKeySequence("Delete"), world.hierarchy_tree)
+    delete_shortcut.activated.connect(delete_selection)
     
 
     # Create the menu
@@ -967,12 +1039,16 @@ if __name__ == "__main__":
     right_panel = QWidget()
     right_panel.setLayout(QVBoxLayout())
     
-    world.make_hierarchy()
+    #world.make_hierarchy()
     
     world.hierarchy_tree.setHeaderLabel("Scene Hierarchy")
     world.hierarchy_tree.setDragEnabled(True)
     world.hierarchy_tree.setAcceptDrops(True)
+    
     right_panel.layout().addWidget(world.hierarchy_tree)
+    terrain_painter_app = terrainEditor.TerrainPainterApp(world, pandaWidget)
+    control_widget = TerrainControlWidget(terrain_painter_app)
+    right_panel.layout().addWidget(control_widget)
     # Create a QWidget to hold the grid layout
     grid_widget = QWidget()
     # Create a grid layout for the input boxes (3x3)
@@ -1132,4 +1208,5 @@ if __name__ == "__main__":
     
     appw.hide()
 
+    
     sys.exit(app.exec_())

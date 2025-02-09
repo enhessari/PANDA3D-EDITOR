@@ -448,24 +448,8 @@ class ScriptInspector(QWidget):
             data = node.get_python_tag("specials_properties") or {"__UIEditorButton__"}
             node.set_python_tag("specials_properties", data)
             node.set_python_tag("id", str(uuid.uuid4())[:8])
-
-            
-        
-        
-        # Set layout properties for spacing
-        script_layout.setSpacing(spacing)
-
-        # Calculate the height based on the number of items
-        num_items = len(["input_text", "canvas_check_box", "label_checkbox", "size", "parent"])
-        total_height = (num_items * item_height) + ((num_items - 1) * spacing)
-        script_box.setLayout(script_layout)
-
-        self.scroll_layout.addWidget(script_box)  # Add to the scrollable layout
+     
     
-    
-    
-        
-        
 
     def set_script(self, path, node, prop=None):
         """
